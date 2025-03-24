@@ -1,3 +1,4 @@
+import json
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Literal, Optional
 
@@ -31,7 +32,7 @@ class AttackConfig:
     seed: Optional[int] = None
 
 
-class AdversarialCodeGen:
+class RobustEval:
     @staticmethod
     def _create_model_config(
         model_type: str,
@@ -105,7 +106,10 @@ class AdversarialCodeGen:
         temperature: float = 0.7,
         top_p: float = 0.95,
         num_beams: int = 10,
-        use_beam_search: bool = False
+        use_beam_search: bool = False,
+        # Other parameters
+        gen_ori: bool = False,
+        original_results: str = None,
     ):
         """
         Run adversarial attack on code with detailed parameter control.
@@ -214,18 +218,24 @@ class AdversarialCodeGen:
         )
 
         # Run attack
-        original_results, adversarial_results = framework.run_attack(
+        results = framework.run_attack(
             save_prompts=save_prompts,
-            save_results=save_results
+            save_results=save_results,
+            gen_ori=gen_ori,
         )
 
         # Visualize the results
         if visualization:
-            visualizer(original_results, adversarial_results, model_path.rsplit('/', 1)[-1], save_results)
+            if gen_ori:
+                visualizer(results[0], results[1], model_path.rsplit('/', 1)[-1], save_results)
+            else:
+                with open(original_results, "r") as f:
+                    ori_results = json.load(f)
+                visualizer(ori_results, results, model_path.rsplit('/', 1)[-1], save_results)
 
 
 def main():
-    fire.Fire(AdversarialCodeGen)
+    fire.Fire(RobustEval)
 
 if __name__ == "__main__":
     main()

@@ -94,7 +94,8 @@ class AttackFramework:
     
     def run_attack(
         self, sample_indices: Optional[List[int]] = None,
-        save_prompts: str = None, save_results: str = None
+        save_prompts: str = None, save_results: str = None,
+        gen_ori: bool = False
     ):
         """
         Run attack pipeline on selected problems.
@@ -104,6 +105,8 @@ class AttackFramework:
                             If None, all problems will be used.
             save_prompts: Optional path to save prompts.
             save_results: Optional path to save results.
+            gen_ori: Whether to generate outputs for original inputs.
+                     If False, will attempt to load existing outputs.
         
         Returns:
             Dictionary containing attack results and evaluation metrics
@@ -119,8 +122,46 @@ class AttackFramework:
             else [(k, v) for i, (k, v) in enumerate(self.problems.items()) 
                   if i in sample_indices]
         )
+        
+        # Load existing prompts
+        original_generations_dict = {}
+        adversarial_generations_dict = {}
+        
+        if save_prompts:
+            os.makedirs(save_prompts, exist_ok=True)
+            adv_prompt_file = os.path.join(save_prompts, "adversarial_prompts.jsonl")
+            ori_prompt_file = os.path.join(save_prompts, "original_prompts.jsonl")
+        
+        if os.path.exists(ori_prompt_file):
+            try:
+                with open(ori_prompt_file, 'r') as f:
+                    for line in f:
+                        try:
+                            data = json.loads(line)
+                            if "task_id" in data:
+                                original_generations_dict[data["task_id"]] = data
+                        except json.JSONDecodeError:
+                            continue
+                print(f"Loaded {len(original_generations_dict)} existing original generations")
+            except Exception as e:
+                print(f"Error reading {ori_prompt_file}: {e}")
+                
+        if os.path.exists(adv_prompt_file):
+            try:
+                with open(adv_prompt_file, 'r') as f:
+                    for line in f:
+                        try:
+                            data = json.loads(line)
+                            if "task_id" in data:
+                                adversarial_generations_dict[data["task_id"]] = data
+                        except json.JSONDecodeError:
+                            continue
+                print(f"Loaded {len(adversarial_generations_dict)} existing adversarial generations")
+            except Exception as e:
+                print(f"Error reading {adv_prompt_file}: {e}")
 
-        # Build Adeversarial Prompts
+
+        # Build Adversarial Prompts
         if self.attack_method != "llm_attack":
             adversarial_prompts = self._build_adversarial_prompts(problems_to_attack)
         else:
@@ -129,56 +170,89 @@ class AttackFramework:
             )
             adversarial_prompts = self._build_llm_adversarial_prompts(problems_to_attack, attack_wrapper)
             assert len(adversarial_prompts) == len(problems_to_attack), "Adversarial prompts not generated correctly"
-
-        for task_id, problem in tqdm(problems_to_attack):
-            # Get appropriate prompt for dataset type
-            # prompt = self._get_problem_prompt(problem)
-            prompt = problem["prompt"]
-            adversarial_prompt = adversarial_prompts[task_id]
             
-            # Generate original output
-            original_output = self.model.generate(prompt)
-            adversarial_output = self.model.generate(adversarial_prompt)
+        ori_prompt_f = None
+        adv_prompt_f = None
+        try:
+            if save_prompts:
+                adv_prompt_f = open(adv_prompt_file, 'a')
+                if gen_ori:
+                    ori_prompt_f = open(ori_prompt_file, 'a')
             
-            # Format for evaluation
-            original_generations.append({
-                "task_id": task_id,
-                "solution": original_output,
-                "prompt": prompt,
-            })
+            original_generations = []
+            adversarial_generations = []
             
-            adversarial_generations.append({
-                "task_id": task_id,
-                "solution": adversarial_output,
-                "prompt": adversarial_prompt,
-            })
-
-        if save_prompts:
-            if not os.path.exists(save_prompts):
-                os.makedirs(save_prompts)
-            save_adv_prompt = os.path.join(save_prompts, "adversarial_prompts.jsonl")
-            save_ori_prompt = os.path.join(save_prompts, "original_prompts.jsonl")
-            with open(save_adv_prompt, 'w') as f:
-                for adv in adversarial_generations:
-                    f.write(json.dumps(adv) + '\n')
-            with open(save_ori_prompt, 'w') as f:
-                for ori in original_generations:
-                    f.write(json.dumps(ori) + '\n')
+            # count skipped and newly generated prompts
+            skipped_orig = 0
+            skipped_adv = 0
+            new_orig = 0
+            new_adv = 0
+            
+            for task_id, problem in tqdm(problems_to_attack, desc="Processing tasks"):
+                prompt = problem["prompt"]
+                adversarial_prompt = adversarial_prompts[task_id]
+                
+                if gen_ori:
+                    if task_id in original_generations_dict:
+                        original_gen = original_generations_dict[task_id]
+                        skipped_orig += 1
+                    else:
+                        original_output = self.model.generate(prompt)
+                        original_gen = {
+                            "task_id": task_id,
+                            "solution": original_output,
+                            "prompt": prompt,
+                        }
+                        new_orig += 1
+                        
+                        if save_prompts and ori_prompt_f:
+                            ori_prompt_f.write(json.dumps(original_gen) + '\n')
+                            ori_prompt_f.flush()
+                    
+                    original_generations.append(original_gen)
+                
+                if task_id in adversarial_generations_dict:
+                    adversarial_gen = adversarial_generations_dict[task_id]
+                    skipped_adv += 1
+                else:
+                    adversarial_output = self.model.generate(adversarial_prompt)
+                    adversarial_gen = {
+                        "task_id": task_id,
+                        "solution": adversarial_output,
+                        "prompt": adversarial_prompt,
+                    }
+                    new_adv += 1
+                    
+                    if save_prompts and adv_prompt_f:
+                        adv_prompt_f.write(json.dumps(adversarial_gen) + '\n')
+                        adv_prompt_f.flush()  # 确保立即写入磁盘
+                
+                adversarial_generations.append(adversarial_gen)
+            
+            # 显示处理统计信息
+            if gen_ori:
+                print(f"Original outputs: {new_orig} newly generated, {skipped_orig} reused from existing file")
+            print(f"Adversarial outputs: {new_adv} newly generated, {skipped_adv} reused from existing file")
+            
+            # Evaluate original and adversarial outputs
+            if gen_ori and save_results:
+                original_results = evaluator(self.dataset, original_generations)
+                os.makedirs(save_results, exist_ok=True)
+                with open(os.path.join(save_results, "original_results.json"), 'w') as f:
+                    json.dump(original_results, f)
+            
+            adversarial_results = evaluator(self.dataset, adversarial_generations)
+            if save_results:
+                os.makedirs(save_results, exist_ok=True)
+                with open(os.path.join(save_results, "adversarial_results.json"), 'w') as f:
+                    json.dump(adversarial_results, f)
+        finally:
+            if ori_prompt_f:
+                ori_prompt_f.close()
+            if adv_prompt_f:
+                adv_prompt_f.close()
         
-        original_results = evaluator(self.dataset, original_generations)
-        adversarial_results = evaluator(self.dataset, adversarial_generations)
-        
-        if save_results:
-            if not os.path.exists(save_results):
-                os.makedirs(save_results)
-            save_adv_results = os.path.join(save_results, "adversarial_results.json")
-            save_ori_results = os.path.join(save_results, "original_results.json")
-            with open(save_adv_results, 'w') as f:
-                json.dump(adversarial_results, f)
-            with open(save_ori_results, 'w') as f:
-                json.dump(original_results, f)
-        
-        return original_results, adversarial_results
+        return (original_results, adversarial_results) if gen_ori else adversarial_results
 
 
 if __name__ == "__main__":
