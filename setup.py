@@ -130,9 +130,9 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'adversarial-codegen=adversarial_codegen.run:main',
-            'adversarial-codegen-test=adversarial_codegen.tests.integration_test.quick_test:main',
-            'adversarial-codegen-noise=adversarial_codegen.noise:main',
+            'adversarial-codegen=src.run:main',
+            'adversarial-codegen-test=src.tests.integration_test.quick_test:main',
+            'adversarial-codegen-noise=src.noise:main',
         ],
     },
 )
