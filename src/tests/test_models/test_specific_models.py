@@ -1,10 +1,7 @@
 import pytest
 
 from src.models import Models
-from src.models.model_implementations import (
-    CodeLLaMAModel,
-    StarCoderModel,
-)
+from src.models.model_implementations import CodeLLaMAModel, StarCoderModel
 
 
 @pytest.fixture
