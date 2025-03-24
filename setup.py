@@ -102,7 +102,7 @@ EXTRA_PACKAGES = {
 }
 
 setup(
-    name="adversarial-codegen",
+    name="reval",
     version="0.1.0",
     author="Sen Fang",
     author_email="fangsen1996@gmail.com",
@@ -130,9 +130,9 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'adversarial-codegen=src.run:main',
-            'adversarial-codegen-test=src.tests.integration_test.quick_test:main',
-            'adversarial-codegen-noise=src.noise:main',
+            'reval=src.run:main',
+            'reval-test=src.tests.integration_test.quick_test:main',
+            'reval-noise=src.noise:main',
         ],
     },
 )
