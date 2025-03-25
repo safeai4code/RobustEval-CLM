@@ -132,7 +132,6 @@ setup(
         'console_scripts': [
             'reval=src.run:main',
             'reval-test=src.tests.integration_test.quick_test:main',
-            'reval-noise=src.noise:main',
         ],
     },
 )

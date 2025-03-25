@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 from src.attacks.char_attack import CharacterCaseAttack
 from src.attacks.chatgpt_attack import AttackType, ChatGPTAttack
+from src.attacks.noise_attack import NoiseAttack
 from src.attacks.synonym_attack import SynonymAttack
 from src.attacks.translation_attack import TranslationAttack
 from src.datasets.dataset_wrapper import AdversarialDatasetWrapper
@@ -67,6 +68,9 @@ class AttackFramework:
         elif self.attack_method == "llm_attack":
             print("Using ChatGPT attack")
             return ChatGPTAttack(config=self.attack_config)
+        elif self.attack_method == "noise":
+            print("Using noise attack")
+            return NoiseAttack(config=self.attack_config)
         else:
             raise ValueError(f"Unknown attack method: {self.attack_method}")
 
@@ -188,11 +192,11 @@ class AttackFramework:
             new_orig = 0
             new_adv = 0
             
-            for task_id, problem in tqdm(problems_to_attack, desc="Processing tasks"):
-                prompt = problem["prompt"]
-                adversarial_prompt = adversarial_prompts[task_id]
-                
-                if gen_ori:
+            # if generate original, do it first
+            if gen_ori:
+                for task_id, problem in tqdm(problems_to_attack, desc="Processing original tasks"):
+                    prompt = problem["prompt"]
+                    
                     if task_id in original_generations_dict:
                         original_gen = original_generations_dict[task_id]
                         skipped_orig += 1
@@ -210,6 +214,13 @@ class AttackFramework:
                             ori_prompt_f.flush()
                     
                     original_generations.append(original_gen)
+            
+            # Now running attack, if noise attack, add noise here
+            if self.attack_method == "noise":
+                self.model = self.attacker.add_noise_to_model(self.model)
+            
+            for task_id, problem in tqdm(problems_to_attack, desc="Processing attack tasks"):
+                adversarial_prompt = adversarial_prompts[task_id]
                 
                 if task_id in adversarial_generations_dict:
                     adversarial_gen = adversarial_generations_dict[task_id]
@@ -225,11 +236,11 @@ class AttackFramework:
                     
                     if save_prompts and adv_prompt_f:
                         adv_prompt_f.write(json.dumps(adversarial_gen) + '\n')
-                        adv_prompt_f.flush()  # 确保立即写入磁盘
+                        adv_prompt_f.flush()  # make sure write to disk right away
                 
                 adversarial_generations.append(adversarial_gen)
             
-            # 显示处理统计信息
+            # Show processing statistic information
             if gen_ori:
                 print(f"Original outputs: {new_orig} newly generated, {skipped_orig} reused from existing file")
             print(f"Adversarial outputs: {new_adv} newly generated, {skipped_adv} reused from existing file")
