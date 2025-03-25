@@ -27,6 +27,9 @@ class AttackConfig:
     adv_tempature: float = 0.7,
     adv_max_tokens: int = 150,
     api_path: str = "",
+    # Noise attack parameters
+    noise_type: str = "gaussian",
+    noise_level: float = 1e-3,
     # General attack parameters
     input_type: str = "prompt"
     seed: Optional[int] = None
@@ -93,6 +96,9 @@ class RobustEval:
         adv_tempature: float = 0.7,
         adv_max_tokens: int = 150,
         api_path: str = "",
+        # Noise attack parameters
+        noise_type: str = "gaussian",
+        noise_level: float = 1e-3,
         input_type: str = None,
         seed: Optional[int] = None,
         # Quantization parameters
@@ -122,7 +128,7 @@ class RobustEval:
             quantized_type: Type of quantization (None, "static", or "dynamic").
             dataset: Dataset to use, choices=["mbpp", "humaneval"].
                 # TODO: Add support for mini version
-            attack_method: Type of attack, choices=["synonym", "char", "translate", "llm_attack"].
+            attack_method: Type of attack, choices=["synonym", "char", "translate", "llm_attack", "noise"].
             save_prompts: Path to save prompts.
             save_results: Path to save results. Required if visualization is True.
             
@@ -131,12 +137,15 @@ class RobustEval:
             max_synonyms: Maximum number of synonyms.
             char_change_probability: Probability of changing character case.
             max_char_changes: Maximum number of character changes.
-            translation_model: Translation model for translation attack. Cho
+            translation_model: Translation model for translation attack.
             attack_model: Model for LLM-based attack. Now only support ChatGPT.
             attack_type: Type of attack for LLM-based attack. Choices=["paraphrase", "constraint_change",
                         "scope_expansion", "semantic_preserve"].
             adv_tempature: Temperature for LLM-based attack.
             adv_max_tokens: Maximum tokens for LLM-based attack.
+            # Noise attack parameters
+            noise_type: Type of noise to add ('uniform' or 'gaussian').
+            noise_level: Level of noise to add.
             input_type: Type of input, decided by the dataset.
             seed: Random seed for reproducibility.
             
@@ -172,6 +181,8 @@ class RobustEval:
             adv_tempature=adv_tempature,
             adv_max_tokens=adv_max_tokens,
             api_path=api_path,
+            noise_type=noise_type,
+            noise_level=noise_level,
             input_type=input_type,
             seed=seed
         )
