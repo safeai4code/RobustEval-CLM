@@ -1,6 +1,8 @@
-import torch
 import random
-from typing import Dict, Any
+from typing import Any, Dict
+
+import torch
+
 from src.framework.base_attack import BaseAttack
 
 
