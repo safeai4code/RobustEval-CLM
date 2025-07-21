@@ -140,17 +140,12 @@ pip install --no-build-isolation -e .[all]
 Note: The `--no-build-isolation` flag is needed for proper installation of quantization dependencies like `autoawq`. UV is recommended over pip for its improved dependency resolution and installation speed.
 
 ## 🎮 Usage
-After installation, you can use the main functionality through the command-line interface. The framework provides two command-line interfaces:
+After installation, you can use the main functionality through the command-line interface:
 
-### 1. Full Evaluation Mode
 ```bash
-adversarial-codegen attack [OPTIONS]
+reval attack [OPTIONS]
 ```
 
-### 2. Quick Test Mode (5 samples)
-```bash
-adversarial-codegen-test attack [OPTIONS]
-```
 
 ### 🔑 Required Arguments
 
@@ -199,14 +194,8 @@ adversarial-codegen-test attack [OPTIONS]
 
 ### 1. 🔰 Basic Usage:
 ```bash
-# Attack original LLMs, full evaluation
-adversarial-codegen attack \
-    --model_path /path/to/model \
-    --save_prompts /path/to/save/prompts \
-    --save_results /path/to/save/results
-
-# Quick test
-adversarial-codegen-test attack \
+# Attack original LLMs
+reval attack \
     --model_path /path/to/model \
     --save_prompts /path/to/save/prompts \
     --save_results /path/to/save/results
@@ -215,11 +204,11 @@ adversarial-codegen-test attack \
 ### 2. 🚀 Advanced usage with custom parameters:
 ```bash
 # Attack LLMs with a specific adversarial attack method (synonym) and generation method (temperature sampling).
-adversarial-codegen attack \
+reval attack \
     --model_path /path/to/model \
     --dataset mbpp \
     --attack_method synonym \
-    --replacement_prob 0.2 \
+    ----replacement_probability 0.2 \
     --max_synonyms 5 \
     --temperature 0.8 \
     --top_p 0.9 \
@@ -233,7 +222,7 @@ adversarial-codegen attack \
 ### 3. 🔧 Using Static Quantization:
 ```bash
 # Attack LLMs with static quant (4-bit quant achieved by bnb)
-adversarial-codegen attack \
+reval attack \
     --model_path /path/to/model \
     --quantized_type static \
     --quant_method bnb \
@@ -246,7 +235,7 @@ adversarial-codegen attack \
 ### 4. 🔄 Using Dynamic Quantization:
 ```bash
 # Attack LLMs with 8-bit quant
-adversarial-codegen attack \
+reval attack \
     --model_path /path/to/model \
     --quantized_type dynamic \
     --quant_bits 8 \

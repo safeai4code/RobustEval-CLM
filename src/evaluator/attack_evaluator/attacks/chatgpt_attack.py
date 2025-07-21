@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 from openai import OpenAI
 
-from src.framework.base_attack import BaseAttack
+from .base_attack import BaseAttack
 
 
 class AttackType(Enum):

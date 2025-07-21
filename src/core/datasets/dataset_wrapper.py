@@ -8,8 +8,8 @@ from typing import Dict, List, Optional, Tuple, Union
 
 from tqdm import tqdm
 
-from src.attacks.chatgpt_attack import AttackType
-from src.framework.base_attack import BaseAttack
+from src.evaluator.attack_evaluator.attacks.chatgpt_attack import AttackType
+from src.evaluator.attack_evaluator.attacks.base_attack import BaseAttack
 
 
 class AdversarialDatasetWrapper:
@@ -284,7 +284,7 @@ if __name__ == "__main__":
     # Example usage showing how to set environment variables
     import os
 
-    from src.attacks.chatgpt_attack import AttackType, ChatGPTAttack
+    from src.evaluator.attack_evaluator.attacks.chatgpt_attack import AttackType, ChatGPTAttack
 
     # Set environment variables (in practice, these would be set outside the script)
     os.environ["ADVERSARIAL_CACHE_DIR"] = str(Path.home() / "research" / "adversarial_cache")

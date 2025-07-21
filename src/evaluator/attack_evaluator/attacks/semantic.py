@@ -1,7 +1,7 @@
 import ast
 from typing import Any, Dict, List, Optional
 
-from ..framework.base_attack import BaseAttack
+from .base_attack import BaseAttack
 
 
 class SemanticAttack(BaseAttack):
