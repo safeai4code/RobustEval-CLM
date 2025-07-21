@@ -29,4 +29,4 @@ class BaseAttack(ABC):
         Returns:
             Modified code with adversarial perturbations
         """
-        pass 
+        pass

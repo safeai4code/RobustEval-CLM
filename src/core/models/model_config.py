@@ -43,4 +43,4 @@ class ModelConfigManager:
                 "quantize_embeddings": quant_params.get("quantize_embeddings", False)
             }
 
-        return model_config 
+        return model_config

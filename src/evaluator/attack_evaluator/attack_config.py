@@ -81,4 +81,4 @@ class EvaluationConfig:
         if self.quantization_config is None:
             self.quantization_config = QuantizationConfig()
         if self.generation_config is None:
-            self.generation_config = GenerationConfig() 
+            self.generation_config = GenerationConfig()

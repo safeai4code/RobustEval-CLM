@@ -117,7 +117,8 @@ if __name__ == "__main__":
     noisy_model2 = attack2.apply_noise(test_model2)
     
     # With same seed, noise should be reproducible
-    assert torch.allclose(modified_weight, noisy_model2.weight, atol=1e-6), "Noise should be reproducible with same seed"
+    assert torch.allclose(modified_weight, noisy_model2.weight, atol=1e-6), \
+        "Noise should be reproducible with same seed"
     print("✓ Reproducibility test passed")
     
     # Test different noise types
@@ -131,7 +132,8 @@ if __name__ == "__main__":
     noisy_model3 = attack_uniform.apply_noise(test_model3)
     
     # Uniform and gaussian noise should be different
-    assert not torch.allclose(modified_weight, noisy_model3.weight, atol=1e-3), "Different noise types should produce different results"
+    assert not torch.allclose(modified_weight, noisy_model3.weight, atol=1e-3), \
+        "Different noise types should produce different results"
     print("✓ Different noise types test passed")
     
     print("All tests passed! NoiseAttack implementation is working correctly.")
