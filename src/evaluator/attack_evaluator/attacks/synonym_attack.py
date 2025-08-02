@@ -7,7 +7,7 @@ from nltk.corpus import wordnet as wn
 from nltk.tag import pos_tag
 from nltk.tokenize import word_tokenize
 
-from src.framework.base_attack import BaseAttack
+from .base_attack import BaseAttack
 
 
 class SynonymAttack(BaseAttack):

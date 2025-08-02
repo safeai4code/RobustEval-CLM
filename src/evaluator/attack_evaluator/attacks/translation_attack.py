@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 import torch
 from transformers import pipeline
 
-from src.framework.base_attack import BaseAttack
+from .base_attack import BaseAttack
 
 
 class TranslationAttack(BaseAttack):

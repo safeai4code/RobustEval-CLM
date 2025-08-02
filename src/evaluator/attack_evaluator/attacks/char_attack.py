@@ -2,7 +2,7 @@ import random
 import re
 from typing import Any, Dict, List, Optional
 
-from src.framework.base_attack import BaseAttack
+from .base_attack import BaseAttack
 
 
 class CharacterCaseAttack(BaseAttack):

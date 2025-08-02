@@ -130,8 +130,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'reval=src.run:main',
-            'reval-test=src.tests.integration_test.quick_test:main',
+            'reval=src.evaluator.attack_evaluator.attack_evaluator:main',
         ],
     },
 )

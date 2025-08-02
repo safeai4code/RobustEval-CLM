@@ -1,19 +1,67 @@
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Type
 
 from evalplus.data import get_human_eval_plus, get_mbpp_plus, write_jsonl
 from tqdm import tqdm
 
-from src.attacks.char_attack import CharacterCaseAttack
-from src.attacks.chatgpt_attack import AttackType, ChatGPTAttack
-from src.attacks.noise_attack import NoiseAttack
-from src.attacks.synonym_attack import SynonymAttack
-from src.attacks.translation_attack import TranslationAttack
-from src.datasets.dataset_wrapper import AdversarialDatasetWrapper
-from src.framework.base_attack import BaseAttack
-from src.models.base_model import BaseModel
-from src.utils.evaluation import evaluator
+from src.core.datasets.dataset_wrapper import AdversarialDatasetWrapper
+from src.evaluator.attack_evaluator.attacks.base_attack import BaseAttack
+from src.core.models.base_model import BaseModel
+from src.evaluator.utils.evaluation import evaluator
+
+
+class AttackRegistry:
+    """Registry for attack classes to reduce coupling."""
+    
+    _attacks: Dict[str, Type[BaseAttack]] = {}
+    
+    @classmethod
+    def register(cls, name: str, attack_class: Type[BaseAttack]):
+        """Register an attack class."""
+        cls._attacks[name] = attack_class
+    
+    @classmethod
+    def get(cls, name: str) -> Type[BaseAttack]:
+        """Get an attack class by name."""
+        if name not in cls._attacks:
+            raise ValueError(f"Unknown attack method: {name}")
+        return cls._attacks[name]
+    
+    @classmethod
+    def list_attacks(cls) -> List[str]:
+        """List all registered attack names."""
+        return list(cls._attacks.keys())
+    
+    @classmethod
+    def auto_discover(cls):
+        """Auto-discover and register all attack classes."""
+        # Import all attack classes to trigger registration
+        try:
+            from src.evaluator.attack_evaluator.attacks import (
+                SynonymAttack, CharacterCaseAttack, TranslationAttack,
+                ChatGPTAttack, NoiseAttack, NaturalNoiseAttack,
+                SemanticAttack, StructuralAttack
+            )
+            
+            # Register all attacks
+            cls.register("synonym", SynonymAttack)
+            cls.register("char", CharacterCaseAttack)
+            cls.register("translation", TranslationAttack)
+            cls.register("translate", TranslationAttack)  # alias
+            cls.register("chatgpt", ChatGPTAttack)
+            cls.register("llm_attack", ChatGPTAttack)  # alias
+            cls.register("noise", NoiseAttack)
+            cls.register("natural_noise", NaturalNoiseAttack)
+            cls.register("semantic", SemanticAttack)
+            cls.register("structural", StructuralAttack)
+            
+        except ImportError as e:
+            print(f"Warning: Could not import some attack classes: {e}")
+
+
+# Auto-discover attacks on module load
+AttackRegistry.auto_discover()
 
 
 class AttackFramework:
@@ -37,7 +85,7 @@ class AttackFramework:
         """
         self.model = model
         self.attack_method = attack_method
-        self.attack_config = attack_config
+        self.attack_config = attack_config or {}
         self.dataset = dataset.lower()
         self.mini = mini
         
@@ -51,28 +99,17 @@ class AttackFramework:
         else:
             raise ValueError(f"Unknown dataset: {dataset}. Choose 'humaneval' or 'mbpp'")
         
-        # Initialize attacker
-        self.attacker = self._initialize_attacker()
-    
-    def _initialize_attacker(self) -> BaseAttack:
-        """Initialize the appropriate attack method."""
-        if self.attack_method == "synonym":
-            print("Using synonym attack")
-            return SynonymAttack(config=self.attack_config)
-        elif self.attack_method == "char":
-            print("Using character case attack")
-            return CharacterCaseAttack(config=self.attack_config)
-        elif self.attack_method == "translate":
-            print("Using translation attack")
-            return TranslationAttack(config=self.attack_config)
-        elif self.attack_method == "llm_attack":
-            print("Using ChatGPT attack")
-            return ChatGPTAttack(config=self.attack_config)
-        elif self.attack_method == "noise":
-            print("Using noise attack")
-            return NoiseAttack(config=self.attack_config)
-        else:
-            raise ValueError(f"Unknown attack method: {self.attack_method}")
+        # Get attack class from registry
+        attack_class = AttackRegistry.get(attack_method)
+        self.attacker = attack_class(self.attack_config)
+        
+        # For noise attacks, apply noise to the model
+        if self.attack_method == "noise":
+            self.model = self._apply_noise_to_model()
+
+    def _apply_noise_to_model(self):
+        """Apply noise attack to the model and return the modified model."""
+        return self.attacker.apply_noise(self.model)
 
     def _build_adversarial_prompts(self, problems: list) -> dict:
         """Build adversarial prompts for the given list of prompts."""
