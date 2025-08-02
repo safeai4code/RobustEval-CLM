@@ -63,7 +63,7 @@ class NoiseAttack(BaseAttack):
 if __name__ == "__main__":
     # Example usage
     import torch.nn as nn
-    
+
     # Create a simple test model
     test_model = nn.Linear(10, 5)
     original_weight = test_model.weight.clone()

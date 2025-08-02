@@ -1,7 +1,8 @@
 """Model configuration utilities."""
 
+from typing import Any, Dict, Optional
+
 import torch
-from typing import Optional, Dict, Any
 
 
 class ModelConfigManager:

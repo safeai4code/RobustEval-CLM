@@ -6,8 +6,8 @@ from evalplus.data import get_human_eval_plus, get_mbpp_plus, write_jsonl
 from tqdm import tqdm
 
 from src.core.datasets.dataset_wrapper import AdversarialDatasetWrapper
-from src.evaluator.attack_evaluator.attacks.base_attack import BaseAttack
 from src.core.models.base_model import BaseModel
+from src.evaluator.attack_evaluator.attacks.base_attack import BaseAttack
 from src.evaluator.utils.evaluation import evaluator
 
 
@@ -39,11 +39,16 @@ class AttackRegistry:
         # Import all attack classes to trigger registration
         try:
             from src.evaluator.attack_evaluator.attacks import (
-                SynonymAttack, CharacterCaseAttack, TranslationAttack,
-                ChatGPTAttack, NoiseAttack, NaturalNoiseAttack,
-                SemanticAttack, StructuralAttack
+                CharacterCaseAttack,
+                ChatGPTAttack,
+                NaturalNoiseAttack,
+                NoiseAttack,
+                SemanticAttack,
+                StructuralAttack,
+                SynonymAttack,
+                TranslationAttack,
             )
-            
+
             # Register all attacks
             cls.register("synonym", SynonymAttack)
             cls.register("char", CharacterCaseAttack)

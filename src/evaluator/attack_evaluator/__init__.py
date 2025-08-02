@@ -1,6 +1,11 @@
 """Attack evaluator module."""
 
-from .attack_config import AttackConfig, QuantizationConfig, GenerationConfig, EvaluationConfig
+from .attack_config import (
+    AttackConfig,
+    EvaluationConfig,
+    GenerationConfig,
+    QuantizationConfig,
+)
 from .attack_evaluator import AttackEvaluator
 
 __all__ = [
