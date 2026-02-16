@@ -65,6 +65,9 @@ class EvaluationConfig:
     save_results: Optional[str] = None
     visualization: bool = False
     
+    # VLLM parameters
+    tensor_parallel_size: Optional[int] = None
+    
     # Other parameters
     gen_ori: bool = False
     original_results: Optional[str] = None

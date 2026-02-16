@@ -11,6 +11,18 @@ from src.utils.function_extractor import extract_functions
 
 from .base_model import BaseModel
 
+# Configure vLLM environment for deterministic behavior before importing
+# Disable V1 multiprocessing for reproducibility
+os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
+# Disable P2P for stability on multi-GPU setups without NVLink
+os.environ.setdefault("NCCL_P2P_DISABLE", "1")
+
+# Inject noise method to vLLM Worker class BEFORE importing vLLM
+from .vllm_noise_injector import inject_noise_method
+inject_noise_method()
+
+from vllm import LLM, SamplingParams
+
 
 @dataclass
 class GenerationStrategy:
@@ -657,3 +669,288 @@ class MagicCoderModel(BaseModel):
 
     def batch_generate(self, prompts: List[str], **kwargs) -> List[str]:
         return [self.generate(prompt, **kwargs) for prompt in prompts]
+
+
+class VLLMModel(BaseModel):
+    """vLLM-based model implementation for high-throughput inference"""
+    
+    def __init__(self, model_path: str = "codellama/CodeLlama-7b-hf", **kwargs):
+        super().__init__(model_path, **kwargs)
+        self.gen_config = kwargs.get('generation_config')
+        self.tensor_parallel_size = kwargs.get('tensor_parallel_size', 1)
+        self.gpu_memory_utilization = kwargs.get('gpu_memory_utilization', 0.85)
+        self.max_model_len = kwargs.get('max_model_len', None)
+        self.seed = kwargs.get('seed', 0)
+        self.load()
+
+    def load(self) -> None:
+        """Load model using vLLM engine"""
+        self.SamplingParams = SamplingParams
+
+        print(f"Loading model with vLLM: {self.model_path}")
+        
+        self.model = LLM(
+            model=self.model_path,
+            tensor_parallel_size=self.tensor_parallel_size,
+            gpu_memory_utilization=self.gpu_memory_utilization,
+            max_model_len=self.max_model_len,
+            seed=self.seed,
+            trust_remote_code=True,
+        )
+        
+        self.tokenizer = self.model.get_tokenizer()
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        
+        print("vLLM model loaded successfully")
+
+    def _get_sampling_params(self, strategy: GenerationStrategy) -> 'SamplingParams':
+        """Create vLLM sampling parameters based on strategy"""
+        if strategy.num_return_sequences == 1:
+            print("Using greedy decoding")
+            return self.SamplingParams(
+                max_tokens=strategy.max_length,
+                n=1,
+                temperature=0.0,
+                top_p=1.0,
+            )
+        elif strategy.use_beam_search:
+            print("Using beam search")
+            return self.SamplingParams(
+                max_tokens=strategy.max_length,
+                n=strategy.num_return_sequences,
+                best_of=strategy.num_beams,
+                temperature=0.0,
+                use_beam_search=True,
+            )
+        else:
+            print("Using temperature sampling")
+            return self.SamplingParams(
+                max_tokens=strategy.max_length,
+                n=strategy.num_return_sequences,
+                temperature=strategy.temperature,
+                top_p=strategy.top_p,
+            )
+
+    def _extract_completion(self, full_text: str, prompt: str) -> str:
+        """Extract only the completion part from the generated text"""
+        output = full_text[len(prompt):].lstrip()
+        gen_solution = extract_functions(output)
+
+        if gen_solution is not None:
+            return gen_solution
+        else:
+            return output
+
+    def generate(self, prompt: str) -> Union[str, List[str]]:
+        """
+        Generate completion(s) for a given prompt using vLLM.
+        
+        Args:
+            prompt: Input prompt text
+        
+        Returns:
+            Single string if num_return_sequences=1, otherwise list of strings
+        """
+        strategy = GenerationStrategy()
+        if self.gen_config:
+            strategy_dict = strategy.__dict__.copy()
+            strategy_dict.update(self.gen_config)
+            strategy = GenerationStrategy(**strategy_dict)
+
+        sampling_params = self._get_sampling_params(strategy)
+        
+        print(f"Generating with prompt: {prompt}")
+        outputs = self.model.generate([prompt], sampling_params)
+        print("Finished generation")
+
+        # vLLM output.text contains only the completion, not the full text
+        decoded_outputs = []
+        for output in outputs[0].outputs:
+            completion = output.text.lstrip()
+            gen_solution = extract_functions(completion)
+            decoded_outputs.append(gen_solution if gen_solution is not None else completion)
+
+        return decoded_outputs[0] if strategy.num_return_sequences == 1 else decoded_outputs
+
+    def batch_generate(self, prompts: List[str], **kwargs) -> List[str]:
+        """Efficient batch generation using vLLM"""
+        strategy = GenerationStrategy()
+        if self.gen_config:
+            strategy_dict = strategy.__dict__.copy()
+            strategy_dict.update(self.gen_config)
+            strategy = GenerationStrategy(**strategy_dict)
+
+        sampling_params = self._get_sampling_params(strategy)
+        
+        outputs = self.model.generate(prompts, sampling_params)
+        
+        # vLLM output.text contains only the completion, not the full text
+        results = []
+        for output in outputs:
+            completion = output.outputs[0].text.lstrip()
+            gen_solution = extract_functions(completion)
+            results.append(gen_solution if gen_solution is not None else completion)
+        
+        return results
+
+
+class VLLMQuantizedModel(BaseModel):
+    """vLLM-based model with BitsAndBytes quantization support"""
+    
+    def __init__(self, model_path: str = "codellama/CodeLlama-7b-hf", **kwargs):
+        try:
+            self.quant_config = QuantizationConfig(**kwargs.get('quant_config', {}))
+        except TypeError:
+            raise ValueError("Quantization parameters not provided")
+        
+        self.gen_config = kwargs.get('generation_config')
+        self.tensor_parallel_size = kwargs.get('tensor_parallel_size', 1)
+        self.gpu_memory_utilization = kwargs.get('gpu_memory_utilization', 0.9)
+        self.max_model_len = kwargs.get('max_model_len', None)
+        self.seed = kwargs.get('seed', 0)
+        
+        super().__init__(model_path, **kwargs)
+        self.load()
+
+    def load(self) -> None:
+        """Load model using vLLM with BNB quantization"""
+        self.SamplingParams = SamplingParams
+
+        if self.quant_config.method != "bnb":
+            raise ValueError(
+                f"VLLMQuantizedModel only supports BNB quantization, got: {self.quant_config.method}"
+            )
+
+        print(f"Loading model with vLLM + BNB quantization ({self.quant_config.bits} bits)")
+        
+        # Map quantization config to vLLM format
+        quantization = None
+        if self.quant_config.bits == 8:
+            quantization = "bitsandbytes"
+        elif self.quant_config.bits == 4:
+            quantization = "bitsandbytes"
+        else:
+            raise ValueError(f"Unsupported quantization bits: {self.quant_config.bits}")
+
+        self.model = LLM(
+            model=self.model_path,
+            quantization=quantization,
+            tensor_parallel_size=self.tensor_parallel_size,
+            gpu_memory_utilization=self.gpu_memory_utilization,
+            max_model_len=self.max_model_len,
+            seed=self.seed,
+            trust_remote_code=True,
+        )
+        
+        self.tokenizer = self.model.get_tokenizer()
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        
+        print("vLLM quantized model loaded successfully")
+        print(self.get_memory_stats())
+
+    def get_memory_stats(self) -> dict:
+        """Get current GPU memory statistics"""
+        if not torch.cuda.is_available():
+            return {"error": "CUDA not available"}
+            
+        return {
+            "allocated": torch.cuda.memory_allocated() / 1024**3,
+            "reserved": torch.cuda.memory_reserved() / 1024**3,
+            "max_allocated": torch.cuda.max_memory_allocated() / 1024**3,
+            "quantization_method": self.quant_config.method,
+            "quantization_bits": self.quant_config.bits
+        }
+
+    def _get_sampling_params(self, strategy: GenerationStrategy) -> 'SamplingParams':
+        """Create vLLM sampling parameters based on strategy"""
+        if strategy.num_return_sequences == 1:
+            print("Using greedy decoding")
+            return self.SamplingParams(
+                max_tokens=strategy.max_length,
+                n=1,
+                temperature=0.0,
+                top_p=1.0,
+            )
+        elif strategy.use_beam_search:
+            print("Using beam search")
+            return self.SamplingParams(
+                max_tokens=strategy.max_length,
+                n=strategy.num_return_sequences,
+                best_of=strategy.num_beams,
+                temperature=0.0,
+                use_beam_search=True,
+            )
+        else:
+            print("Using temperature sampling")
+            return self.SamplingParams(
+                max_tokens=strategy.max_length,
+                n=strategy.num_return_sequences,
+                temperature=strategy.temperature,
+                top_p=strategy.top_p,
+            )
+
+    def _extract_completion(self, full_text: str, prompt: str) -> str:
+        """Extract only the completion part from the generated text"""
+        output = full_text[len(prompt):].lstrip()
+        gen_solution = extract_functions(output)
+
+        if gen_solution is not None:
+            return gen_solution
+        else:
+            return output
+
+    def generate(self, prompt: str) -> Union[str, List[str]]:
+        """
+        Generate completion(s) for a given prompt using vLLM with quantization.
+        
+        Args:
+            prompt: Input prompt text
+        
+        Returns:
+            Single string if num_return_sequences=1, otherwise list of strings
+        """
+        strategy = GenerationStrategy()
+        if self.gen_config:
+            strategy_dict = strategy.__dict__.copy()
+            strategy_dict.update(self.gen_config)
+            strategy = GenerationStrategy(**strategy_dict)
+
+        sampling_params = self._get_sampling_params(strategy)
+        
+        print(f"Generating with prompt: {prompt}")
+        outputs = self.model.generate([prompt], sampling_params)
+        print("Finished generation")
+
+        # vLLM output.text contains only the completion, not the full text
+        decoded_outputs = []
+        for output in outputs[0].outputs:
+            completion = output.text.lstrip()
+            gen_solution = extract_functions(completion)
+            decoded_outputs.append(gen_solution if gen_solution is not None else completion)
+
+        return decoded_outputs[0] if strategy.num_return_sequences == 1 else decoded_outputs
+
+    def batch_generate(self, prompts: List[str], **kwargs) -> List[str]:
+        """Efficient batch generation using vLLM with quantization"""
+        strategy = GenerationStrategy()
+        if self.gen_config:
+            strategy_dict = strategy.__dict__.copy()
+            strategy_dict.update(self.gen_config)
+            strategy = GenerationStrategy(**strategy_dict)
+
+        sampling_params = self._get_sampling_params(strategy)
+        
+        outputs = self.model.generate(prompts, sampling_params)
+        
+        # vLLM output.text contains only the completion, not the full text
+        results = []
+        for output in outputs:
+            completion = output.outputs[0].text.lstrip()
+            gen_solution = extract_functions(completion)
+            results.append(gen_solution if gen_solution is not None else completion)
+        
+        return results

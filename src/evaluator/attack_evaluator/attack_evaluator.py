@@ -62,6 +62,8 @@ class AttackEvaluator:
         top_p: float = 0.95,
         num_beams: int = 10,
         use_beam_search: bool = False,
+        # VLLM parameters
+        tensor_parallel_size: Optional[int] = None,
         # Other parameters
         gen_ori: bool = False,
         original_results: str = None,
@@ -108,6 +110,9 @@ class AttackEvaluator:
             top_p: Top-p for sampling, generally used with temperature.
             num_beams: Number of beams for beam search.
             use_beam_search: Whether to use beam search.
+            
+            # VLLM parameters
+            tensor_parallel_size: Number of GPUs for tensor parallelism. If None, uses all available GPUs.
             
         Returns:
             Dictionary containing evaluation results.
@@ -160,6 +165,7 @@ class AttackEvaluator:
             attack_config=attack_config,
             quantization_config=quantization_config,
             generation_config=generation_config,
+            tensor_parallel_size=tensor_parallel_size,
         )
         
         return self.evaluate_with_config(config)
@@ -179,6 +185,12 @@ class AttackEvaluator:
         # Validate parameters
         self._validate_parameters(config.visualization, config.save_results)
         
+        # Determine actual model type to load
+        actual_model_type = self._determine_model_type(
+            config.model_type, 
+            config.quantized_type
+        )
+        
         # Set up model configuration
         model_config = self._setup_model_config(
             config.model_type, 
@@ -192,23 +204,20 @@ class AttackEvaluator:
             config.generation_config.temperature,
             config.generation_config.top_p,
             config.generation_config.num_beams,
-            config.generation_config.use_beam_search
+            config.generation_config.use_beam_search,
+            config.tensor_parallel_size
         )
         
         # Load model
-        if config.quantized_type is None:
-            # Load regular model
-            model = Models.load(config.model_type, config.model_path, **model_config)
-        else:
-            # Load quantized model
-            model = Models.load(config.quantized_type, config.model_path, **model_config)
+        model = Models.load(actual_model_type, config.model_path, **model_config)
         
         # Create attack framework
         framework = AttackFramework(
             model=model,
             attack_method=config.attack_method,
             attack_config=asdict(config.attack_config),
-            dataset=config.dataset
+            dataset=config.dataset,
+            is_vllm=(config.model_type == "vllm")
         )
         
         # Run attacks and get results
@@ -229,10 +238,34 @@ class AttackEvaluator:
         if visualization and save_results is None:
             raise ValueError("save_results must be provided when visualization is enabled")
     
+    def _determine_model_type(self, model_type: str, quantized_type: Optional[str]) -> str:
+        """
+        Determine the actual model type to load based on model_type and quantized_type.
+        
+        Args:
+            model_type: Base model type (e.g., "vllm", "codellama")
+            quantized_type: Quantization type (e.g., "static", "dynamic")
+            
+        Returns:
+            Actual model type to load from registry
+        """
+        # For VLLM models, determine if quantized or not
+        if model_type == "vllm":
+            if quantized_type is not None:
+                return "vllm_quantized"
+            else:
+                return "vllm"
+        
+        # For other models, use quantized_type if specified, otherwise use model_type
+        if quantized_type is not None:
+            return quantized_type
+        else:
+            return model_type
+    
     def _setup_model_config(
         self, model_type, quantized_type, quant_method, quant_bits, quant_type,
         quantize_embeddings, num_return_sequences, max_length, temperature,
-        top_p, num_beams, use_beam_search
+        top_p, num_beams, use_beam_search, tensor_parallel_size
     ) -> Dict[str, Any]:
         """Set up model configuration including quantization and generation parameters."""
         quant_params = {
@@ -251,12 +284,26 @@ class AttackEvaluator:
             "use_beam_search": use_beam_search
         }
         
-        return self.config_manager.create_model_config(
+        model_config = self.config_manager.create_model_config(
             model_type=model_type,
             quantized_type=quantized_type,
             quant_params=quant_params,
             gen_params=gen_params
         )
+        
+        # Add VLLM-specific parameters
+        if model_type == "vllm":
+            # Auto-detect GPU count if tensor_parallel_size not specified
+            if tensor_parallel_size is None:
+                import torch
+                if torch.cuda.is_available():
+                    tensor_parallel_size = torch.cuda.device_count()
+                else:
+                    tensor_parallel_size = 1
+            
+            model_config["tensor_parallel_size"] = tensor_parallel_size
+        
+        return model_config
     
     def _generate_visualization(
         self, results, gen_ori: bool, original_results: Optional[str], 
@@ -289,7 +336,7 @@ class AttackEvaluatorCLI:
         Accepts all parameters supported by AttackEvaluator.evaluate().
         Use 'reval attack --help' to see all available parameters.
         """
-        return self.evaluator.evaluate(**kwargs)
+        self.evaluator.evaluate(**kwargs)
 
     def attack_with_config(self, config_path: str):
         """

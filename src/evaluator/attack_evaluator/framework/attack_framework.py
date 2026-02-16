@@ -76,7 +76,8 @@ class AttackFramework:
         attack_method: str = "synonym",
         attack_config: Dict[str, Any] = None,
         dataset: str = "humaneval",
-        mini: bool = False
+        mini: bool = False,
+        is_vllm: bool = False
     ):
         """
         Initialize attack framework.
@@ -87,12 +88,14 @@ class AttackFramework:
             attack_config: Attack configuration
             dataset: Dataset to use ("humaneval" or "mbpp")
             mini: Whether to use mini version of dataset
+            is_vllm: Whether the model is a VLLM model (for batch processing)
         """
         self.model = model
         self.attack_method = attack_method
         self.attack_config = attack_config or {}
         self.dataset = dataset.lower()
         self.mini = mini
+        self.is_vllm = is_vllm
         
         # Load appropriate dataset
         if self.dataset == "humaneval":
@@ -107,10 +110,6 @@ class AttackFramework:
         # Get attack class from registry
         attack_class = AttackRegistry.get(attack_method)
         self.attacker = attack_class(self.attack_config)
-        
-        # For noise attacks, apply noise to the model
-        if self.attack_method == "noise":
-            self.model = self._apply_noise_to_model()
 
     def _apply_noise_to_model(self):
         """Apply noise attack to the model and return the modified model."""
@@ -236,51 +235,118 @@ class AttackFramework:
             
             # if generate original, do it first
             if gen_ori:
-                for task_id, problem in tqdm(problems_to_attack, desc="Processing original tasks"):
-                    prompt = problem["prompt"]
+                if self.is_vllm:
+                    # Batch generation for VLLM
+                    tasks_to_generate = []
+                    task_ids_to_generate = []
                     
-                    if task_id in original_generations_dict:
-                        original_gen = original_generations_dict[task_id]
-                        skipped_orig += 1
-                    else:
-                        original_output = self.model.generate(prompt)
-                        original_gen = {
-                            "task_id": task_id,
-                            "solution": original_output,
-                            "prompt": prompt,
-                        }
-                        new_orig += 1
+                    for task_id, problem in problems_to_attack:
+                        if task_id in original_generations_dict:
+                            original_generations.append(original_generations_dict[task_id])
+                            skipped_orig += 1
+                        else:
+                            tasks_to_generate.append(problem["prompt"])
+                            task_ids_to_generate.append(task_id)
+                    
+                    if tasks_to_generate:
+                        print(f"Generating {len(tasks_to_generate)} original outputs in batch...")
+                        original_outputs = self.model.batch_generate(tasks_to_generate)
                         
-                        if save_prompts and ori_prompt_f:
-                            ori_prompt_f.write(json.dumps(original_gen) + '\n')
-                            ori_prompt_f.flush()
-                    
-                    original_generations.append(original_gen)
+                        for task_id, prompt, output in zip(task_ids_to_generate, tasks_to_generate, original_outputs):
+                            original_gen = {
+                                "task_id": task_id,
+                                "solution": output,
+                                "prompt": prompt,
+                            }
+                            new_orig += 1
+                            
+                            if save_prompts and ori_prompt_f:
+                                ori_prompt_f.write(json.dumps(original_gen) + '\n')
+                                ori_prompt_f.flush()
+                            
+                            original_generations.append(original_gen)
+                else:
+                    # Sequential generation for non-VLLM models
+                    for task_id, problem in tqdm(problems_to_attack, desc="Processing original tasks"):
+                        prompt = problem["prompt"]
+                        
+                        if task_id in original_generations_dict:
+                            original_gen = original_generations_dict[task_id]
+                            skipped_orig += 1
+                        else:
+                            original_output = self.model.generate(prompt)
+                            original_gen = {
+                                "task_id": task_id,
+                                "solution": original_output,
+                                "prompt": prompt,
+                            }
+                            new_orig += 1
+                            
+                            if save_prompts and ori_prompt_f:
+                                ori_prompt_f.write(json.dumps(original_gen) + '\n')
+                                ori_prompt_f.flush()
+                        
+                        original_generations.append(original_gen)
             
             # Now running attack, if noise attack, add noise here
             if self.attack_method == "noise":
-                self.model = self.attacker.add_noise_to_model(self.model)
+                self.model = self.attacker.apply_noise(self.model)
             
-            for task_id, problem in tqdm(problems_to_attack, desc="Processing attack tasks"):
-                adversarial_prompt = adversarial_prompts[task_id]
+            if self.is_vllm:
+                # Batch generation for VLLM
+                tasks_to_generate = []
+                task_ids_to_generate = []
+                prompts_to_generate = []
                 
-                if task_id in adversarial_generations_dict:
-                    adversarial_gen = adversarial_generations_dict[task_id]
-                    skipped_adv += 1
-                else:
-                    adversarial_output = self.model.generate(adversarial_prompt)
-                    adversarial_gen = {
-                        "task_id": task_id,
-                        "solution": adversarial_output,
-                        "prompt": adversarial_prompt,
-                    }
-                    new_adv += 1
+                for task_id, problem in problems_to_attack:
+                    adversarial_prompt = adversarial_prompts[task_id]
                     
-                    if save_prompts and adv_prompt_f:
-                        adv_prompt_f.write(json.dumps(adversarial_gen) + '\n')
-                        adv_prompt_f.flush()  # make sure write to disk right away
+                    if task_id in adversarial_generations_dict:
+                        adversarial_generations.append(adversarial_generations_dict[task_id])
+                        skipped_adv += 1
+                    else:
+                        prompts_to_generate.append(adversarial_prompt)
+                        task_ids_to_generate.append(task_id)
                 
-                adversarial_generations.append(adversarial_gen)
+                if prompts_to_generate:
+                    print(f"Generating {len(prompts_to_generate)} adversarial outputs in batch...")
+                    adversarial_outputs = self.model.batch_generate(prompts_to_generate)
+                    
+                    for task_id, prompt, output in zip(task_ids_to_generate, prompts_to_generate, adversarial_outputs):
+                        adversarial_gen = {
+                            "task_id": task_id,
+                            "solution": output,
+                            "prompt": prompt,
+                        }
+                        new_adv += 1
+                        
+                        if save_prompts and adv_prompt_f:
+                            adv_prompt_f.write(json.dumps(adversarial_gen) + '\n')
+                            adv_prompt_f.flush()
+                        
+                        adversarial_generations.append(adversarial_gen)
+            else:
+                # Sequential generation for non-VLLM models
+                for task_id, problem in tqdm(problems_to_attack, desc="Processing attack tasks"):
+                    adversarial_prompt = adversarial_prompts[task_id]
+                    
+                    if task_id in adversarial_generations_dict:
+                        adversarial_gen = adversarial_generations_dict[task_id]
+                        skipped_adv += 1
+                    else:
+                        adversarial_output = self.model.generate(adversarial_prompt)
+                        adversarial_gen = {
+                            "task_id": task_id,
+                            "solution": adversarial_output,
+                            "prompt": adversarial_prompt,
+                        }
+                        new_adv += 1
+                        
+                        if save_prompts and adv_prompt_f:
+                            adv_prompt_f.write(json.dumps(adversarial_gen) + '\n')
+                            adv_prompt_f.flush()  # make sure write to disk right away
+                    
+                    adversarial_generations.append(adversarial_gen)
             
             # Show processing statistic information
             if gen_ori:
