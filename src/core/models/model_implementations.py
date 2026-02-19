@@ -679,8 +679,8 @@ class VLLMModel(BaseModel):
         self.gen_config = kwargs.get('generation_config')
         self.tensor_parallel_size = kwargs.get('tensor_parallel_size', 1)
         self.gpu_memory_utilization = kwargs.get('gpu_memory_utilization', 0.85)
-        self.max_model_len = kwargs.get('max_model_len', None)
-        self.seed = kwargs.get('seed', 0)
+        self.max_model_len = kwargs.get('max_model_len', 8192)
+        self.seed = kwargs.get('seed', 42)
         self.load()
 
     def load(self) -> None:
@@ -733,22 +733,39 @@ class VLLMModel(BaseModel):
                 top_p=strategy.top_p,
             )
 
-    def _extract_completion(self, full_text: str, prompt: str) -> str:
-        """Extract only the completion part from the generated text"""
-        output = full_text[len(prompt):].lstrip()
-        gen_solution = extract_functions(output)
+    def _extract_completion(self, completion: str, prompt: str, concat_prompt: bool = False) -> str:
+        """Extract function from completion text
+        
+        Args:
+            completion: The completion text (vLLM already strips the prompt)
+            prompt: The original prompt
+            concat_prompt: Whether to concatenate prompt with output before extraction.
+                          True for humaneval (code completion), False for mbpp (complete generation).
+        
+        Returns:
+            Extracted completion text
+        """
+        # If concat_prompt is True, concatenate prompt and completion before extraction
+        if concat_prompt:
+            code_to_extract = prompt + completion
+        else:
+            code_to_extract = completion
+        
+        gen_solution = extract_functions(code_to_extract)
 
         if gen_solution is not None:
             return gen_solution
         else:
-            return output
+            return code_to_extract
 
-    def generate(self, prompt: str) -> Union[str, List[str]]:
+    def generate(self, prompt: str, concat_prompt: bool = False) -> Union[str, List[str]]:
         """
         Generate completion(s) for a given prompt using vLLM.
         
         Args:
             prompt: Input prompt text
+            concat_prompt: Whether to concatenate prompt with output before extraction.
+                          True for humaneval (code completion), False for mbpp (complete generation).
         
         Returns:
             Single string if num_return_sequences=1, otherwise list of strings
@@ -768,14 +785,22 @@ class VLLMModel(BaseModel):
         # vLLM output.text contains only the completion, not the full text
         decoded_outputs = []
         for output in outputs[0].outputs:
-            completion = output.text.lstrip()
-            gen_solution = extract_functions(completion)
-            decoded_outputs.append(gen_solution if gen_solution is not None else completion)
+            completion = output.text
+            decoded_outputs.append(self._extract_completion(completion, prompt, concat_prompt))
 
         return decoded_outputs[0] if strategy.num_return_sequences == 1 else decoded_outputs
 
-    def batch_generate(self, prompts: List[str], **kwargs) -> List[str]:
-        """Efficient batch generation using vLLM"""
+    def batch_generate(self, prompts: List[str], concat_prompt: bool = False, **kwargs) -> List[str]:
+        """Efficient batch generation using vLLM
+        
+        Args:
+            prompts: List of input prompts
+            concat_prompt: Whether to concatenate prompt with output before extraction.
+                          True for humaneval (code completion), False for mbpp (complete generation).
+        
+        Returns:
+            List of generated completions
+        """
         strategy = GenerationStrategy()
         if self.gen_config:
             strategy_dict = strategy.__dict__.copy()
@@ -788,10 +813,9 @@ class VLLMModel(BaseModel):
         
         # vLLM output.text contains only the completion, not the full text
         results = []
-        for output in outputs:
-            completion = output.outputs[0].text.lstrip()
-            gen_solution = extract_functions(completion)
-            results.append(gen_solution if gen_solution is not None else completion)
+        for prompt, output in zip(prompts, outputs):
+            completion = output.outputs[0].text
+            results.append(self._extract_completion(completion, prompt, concat_prompt))
         
         return results
 
@@ -807,9 +831,9 @@ class VLLMQuantizedModel(BaseModel):
         
         self.gen_config = kwargs.get('generation_config')
         self.tensor_parallel_size = kwargs.get('tensor_parallel_size', 1)
-        self.gpu_memory_utilization = kwargs.get('gpu_memory_utilization', 0.9)
-        self.max_model_len = kwargs.get('max_model_len', None)
-        self.seed = kwargs.get('seed', 0)
+        self.gpu_memory_utilization = kwargs.get('gpu_memory_utilization', 0.85)
+        self.max_model_len = kwargs.get('max_model_len', 8192)
+        self.seed = kwargs.get('seed', 42)
         
         super().__init__(model_path, **kwargs)
         self.load()
@@ -893,22 +917,39 @@ class VLLMQuantizedModel(BaseModel):
                 top_p=strategy.top_p,
             )
 
-    def _extract_completion(self, full_text: str, prompt: str) -> str:
-        """Extract only the completion part from the generated text"""
-        output = full_text[len(prompt):].lstrip()
-        gen_solution = extract_functions(output)
+    def _extract_completion(self, completion: str, prompt: str, concat_prompt: bool = False) -> str:
+        """Extract function from completion text
+        
+        Args:
+            completion: The completion text (vLLM already strips the prompt)
+            prompt: The original prompt
+            concat_prompt: Whether to concatenate prompt with output before extraction.
+                          True for humaneval (code completion), False for mbpp (complete generation).
+        
+        Returns:
+            Extracted completion text
+        """
+        # If concat_prompt is True, concatenate prompt and completion before extraction
+        if concat_prompt:
+            code_to_extract = prompt + completion
+        else:
+            code_to_extract = completion
+        
+        gen_solution = extract_functions(code_to_extract)
 
         if gen_solution is not None:
             return gen_solution
         else:
-            return output
-
-    def generate(self, prompt: str) -> Union[str, List[str]]:
+            return code_to_extract
+    
+    def generate(self, prompt: str, concat_prompt: bool = False) -> Union[str, List[str]]:
         """
         Generate completion(s) for a given prompt using vLLM with quantization.
         
         Args:
             prompt: Input prompt text
+            concat_prompt: Whether to concatenate prompt with output before extraction.
+                          True for humaneval (code completion), False for mbpp (complete generation).
         
         Returns:
             Single string if num_return_sequences=1, otherwise list of strings
@@ -928,14 +969,22 @@ class VLLMQuantizedModel(BaseModel):
         # vLLM output.text contains only the completion, not the full text
         decoded_outputs = []
         for output in outputs[0].outputs:
-            completion = output.text.lstrip()
-            gen_solution = extract_functions(completion)
-            decoded_outputs.append(gen_solution if gen_solution is not None else completion)
+            completion = output.text
+            decoded_outputs.append(self._extract_completion(completion, prompt, concat_prompt))
 
         return decoded_outputs[0] if strategy.num_return_sequences == 1 else decoded_outputs
 
-    def batch_generate(self, prompts: List[str], **kwargs) -> List[str]:
-        """Efficient batch generation using vLLM with quantization"""
+    def batch_generate(self, prompts: List[str], concat_prompt: bool = False, **kwargs) -> List[str]:
+        """Efficient batch generation using vLLM with quantization
+        
+        Args:
+            prompts: List of input prompts
+            concat_prompt: Whether to concatenate prompt with output before extraction.
+                          True for humaneval (code completion), False for mbpp (complete generation).
+        
+        Returns:
+            List of generated completions
+        """
         strategy = GenerationStrategy()
         if self.gen_config:
             strategy_dict = strategy.__dict__.copy()
@@ -948,9 +997,8 @@ class VLLMQuantizedModel(BaseModel):
         
         # vLLM output.text contains only the completion, not the full text
         results = []
-        for output in outputs:
-            completion = output.outputs[0].text.lstrip()
-            gen_solution = extract_functions(completion)
-            results.append(gen_solution if gen_solution is not None else completion)
+        for prompt, output in zip(prompts, outputs):
+            completion = output.outputs[0].text
+            results.append(self._extract_completion(completion, prompt, concat_prompt))
         
         return results

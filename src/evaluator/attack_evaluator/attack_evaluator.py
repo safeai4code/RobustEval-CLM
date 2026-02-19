@@ -64,6 +64,7 @@ class AttackEvaluator:
         use_beam_search: bool = False,
         # VLLM parameters
         tensor_parallel_size: Optional[int] = None,
+        gpu_memory_utilization: Optional[float] = None,
         # Other parameters
         gen_ori: bool = False,
         original_results: str = None,
@@ -113,6 +114,7 @@ class AttackEvaluator:
             
             # VLLM parameters
             tensor_parallel_size: Number of GPUs for tensor parallelism. If None, uses all available GPUs.
+            gpu_memory_utilization: GPU memory fraction (e.g. 0.85). Lower if OOM during sampler warmup.
             
         Returns:
             Dictionary containing evaluation results.
@@ -166,6 +168,7 @@ class AttackEvaluator:
             quantization_config=quantization_config,
             generation_config=generation_config,
             tensor_parallel_size=tensor_parallel_size,
+            gpu_memory_utilization=gpu_memory_utilization,
         )
         
         return self.evaluate_with_config(config)
@@ -207,6 +210,8 @@ class AttackEvaluator:
             config.generation_config.use_beam_search,
             config.tensor_parallel_size
         )
+        if config.model_type == "vllm" and config.gpu_memory_utilization is not None:
+            model_config["gpu_memory_utilization"] = config.gpu_memory_utilization
         
         # Load model
         model = Models.load(actual_model_type, config.model_path, **model_config)

@@ -101,9 +101,11 @@ class AttackFramework:
         if self.dataset == "humaneval":
             self.problems = get_human_eval_plus(mini=mini)
             self.attack_config['input_type'] = 'code'
+            self.concat_prompt = True  # humaneval needs prompt+output concatenation
         elif self.dataset == "mbpp":
             self.problems = get_mbpp_plus(mini=mini)
             self.attack_config['input_type'] = 'prompt'
+            self.concat_prompt = False  # mbpp output is already complete
         else:
             raise ValueError(f"Unknown dataset: {dataset}. Choose 'humaneval' or 'mbpp'")
         
@@ -250,7 +252,7 @@ class AttackFramework:
                     
                     if tasks_to_generate:
                         print(f"Generating {len(tasks_to_generate)} original outputs in batch...")
-                        original_outputs = self.model.batch_generate(tasks_to_generate)
+                        original_outputs = self.model.batch_generate(tasks_to_generate, concat_prompt=self.concat_prompt)
                         
                         for task_id, prompt, output in zip(task_ids_to_generate, tasks_to_generate, original_outputs):
                             original_gen = {
@@ -274,7 +276,7 @@ class AttackFramework:
                             original_gen = original_generations_dict[task_id]
                             skipped_orig += 1
                         else:
-                            original_output = self.model.generate(prompt)
+                            original_output = self.model.generate(prompt, concat_prompt=self.concat_prompt)
                             original_gen = {
                                 "task_id": task_id,
                                 "solution": original_output,
@@ -310,7 +312,7 @@ class AttackFramework:
                 
                 if prompts_to_generate:
                     print(f"Generating {len(prompts_to_generate)} adversarial outputs in batch...")
-                    adversarial_outputs = self.model.batch_generate(prompts_to_generate)
+                    adversarial_outputs = self.model.batch_generate(prompts_to_generate, concat_prompt=self.concat_prompt)
                     
                     for task_id, prompt, output in zip(task_ids_to_generate, prompts_to_generate, adversarial_outputs):
                         adversarial_gen = {
@@ -334,7 +336,7 @@ class AttackFramework:
                         adversarial_gen = adversarial_generations_dict[task_id]
                         skipped_adv += 1
                     else:
-                        adversarial_output = self.model.generate(adversarial_prompt)
+                        adversarial_output = self.model.generate(adversarial_prompt, concat_prompt=self.concat_prompt)
                         adversarial_gen = {
                             "task_id": task_id,
                             "solution": adversarial_output,
@@ -344,7 +346,7 @@ class AttackFramework:
                         
                         if save_prompts and adv_prompt_f:
                             adv_prompt_f.write(json.dumps(adversarial_gen) + '\n')
-                            adv_prompt_f.flush()  # make sure write to disk right away
+                            adv_prompt_f.flush()
                     
                     adversarial_generations.append(adversarial_gen)
             

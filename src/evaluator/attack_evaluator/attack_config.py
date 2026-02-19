@@ -67,6 +67,7 @@ class EvaluationConfig:
     
     # VLLM parameters
     tensor_parallel_size: Optional[int] = None
+    gpu_memory_utilization: Optional[float] = None  # e.g. 0.85; None uses model default
     
     # Other parameters
     gen_ori: bool = False
