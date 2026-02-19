@@ -19,7 +19,7 @@ class TranslationAttack(BaseAttack):
             random.seed(self.seed)
             
         # Initialize translation models
-        self.model_name = config.get('model_name', 'facebook/mbart-large-50-many-to-many-mmt')
+        self.model_name = config.get('translation_model', 'facebook/mbart-large-50-many-to-many-mmt')
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         
         # Initialize forward (en->de) and backward (de->en) translators

@@ -14,6 +14,7 @@ from src.evaluator.attack_evaluator.attack_config import (
     GenerationConfig,
     QuantizationConfig,
 )
+from src.evaluator.attack_evaluator.attack_registry import AttackRegistry
 from src.evaluator.attack_evaluator.framework.attack_framework import AttackFramework
 from src.evaluator.utils import visualizer
 
@@ -176,30 +177,49 @@ class AttackEvaluator:
     def evaluate_with_config(self, config: EvaluationConfig) -> Dict[str, Any]:
         """
         Run adversarial attack evaluation using configuration objects.
-        
-        This is the recommended method for new code as it provides a cleaner API.
-        
+
+        The attacker is initialised *before* the main model so that GPU-heavy
+        attack models (e.g. the translation back-translation pipeline) can
+        claim their memory first.
+
         Args:
-            config: Complete evaluation configuration
-            
+            config: Complete evaluation configuration.
+
         Returns:
             Dictionary containing evaluation results.
         """
-        # Validate parameters
         self._validate_parameters(config.visualization, config.save_results)
-        
-        # Determine actual model type to load
-        actual_model_type = self._determine_model_type(
-            config.model_type, 
-            config.quantized_type
-        )
-        
-        # Set up model configuration
+
+        # ------------------------------------------------------------------
+        # 1. Build the attack config dict and derive input_type from dataset
+        #    so the attacker can be instantiated without the dataset loader.
+        # ------------------------------------------------------------------
+        attack_config_dict = asdict(config.attack_config)
+        dataset_lower = config.dataset.lower()
+        if dataset_lower == "humaneval":
+            attack_config_dict["input_type"] = "code"
+        elif dataset_lower == "mbpp":
+            attack_config_dict["input_type"] = "prompt"
+        else:
+            raise ValueError(f"Unknown dataset: {config.dataset}. Choose 'humaneval' or 'mbpp'")
+
+        # ------------------------------------------------------------------
+        # 2. Instantiate the attacker BEFORE the main model is loaded so that
+        #    GPU resources are reserved in the correct order.
+        # ------------------------------------------------------------------
+        attack_class = AttackRegistry.get(config.attack_method)
+        attacker = attack_class(attack_config_dict)
+
+        # ------------------------------------------------------------------
+        # 3. Load the main (generation) model.
+        # ------------------------------------------------------------------
+        actual_model_type = self._determine_model_type(config.model_type, config.quantized_type)
+
         model_config = self._setup_model_config(
-            config.model_type, 
-            config.quantized_type, 
+            config.model_type,
+            config.quantized_type,
             config.quantization_config.method,
-            config.quantization_config.bits, 
+            config.quantization_config.bits,
             config.quantization_config.quant_type,
             config.quantization_config.quantize_embeddings,
             config.generation_config.num_return_sequences,
@@ -208,34 +228,34 @@ class AttackEvaluator:
             config.generation_config.top_p,
             config.generation_config.num_beams,
             config.generation_config.use_beam_search,
-            config.tensor_parallel_size
+            config.tensor_parallel_size,
         )
         if config.model_type == "vllm" and config.gpu_memory_utilization is not None:
             model_config["gpu_memory_utilization"] = config.gpu_memory_utilization
-        
-        # Load model
+
         model = Models.load(actual_model_type, config.model_path, **model_config)
-        
-        # Create attack framework
+
+        # ------------------------------------------------------------------
+        # 4. Create the framework with the pre-built attacker and run.
+        # ------------------------------------------------------------------
         framework = AttackFramework(
             model=model,
             attack_method=config.attack_method,
-            attack_config=asdict(config.attack_config),
+            attack_config=attack_config_dict,
             dataset=config.dataset,
-            is_vllm=(config.model_type == "vllm")
+            is_vllm=(config.model_type == "vllm"),
+            attacker=attacker,
         )
-        
-        # Run attacks and get results
+
         results = framework.run_attack(
             save_prompts=config.save_prompts,
             save_results=config.save_results,
-            gen_ori=config.gen_ori
+            gen_ori=config.gen_ori,
         )
-        
-        # Visualization if requested
+
         if config.visualization:
             visualizer.visualize_results(results, config.save_results)
-        
+
         return results
     
     def _validate_parameters(self, visualization: bool, save_results: Optional[str]) -> None:
