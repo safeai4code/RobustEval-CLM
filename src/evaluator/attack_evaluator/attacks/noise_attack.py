@@ -77,7 +77,14 @@ class NoiseAttack(BaseAttack):
         
         # Use the injected add_noise method via collective_rpc
         seed = self.seed if self.seed is not None else 42
-        results = executor.collective_rpc("add_noise", args=(self.config['noise_type'], self.config['noise_level'], seed))
+        results = executor.collective_rpc(
+            "add_noise",
+            args=(
+                self.config['noise_type'],
+                self.config['noise_level'],
+                seed
+            )
+        )
         
         # Print results from each worker
         for i, result in enumerate(results):
