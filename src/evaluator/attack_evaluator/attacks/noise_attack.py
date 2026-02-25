@@ -3,11 +3,10 @@ from typing import Any, Dict, Optional
 
 import torch
 
-from .base_attack import BaseAttack
-
 # Import VLLM model classes for isinstance check
 from src.core.models.model_implementations import VLLMModel, VLLMQuantizedModel
 
+from .base_attack import BaseAttack
 
 
 class NoiseAttack(BaseAttack):

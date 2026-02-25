@@ -19,6 +19,7 @@ os.environ.setdefault("NCCL_P2P_DISABLE", "1")
 
 # Inject noise method to vLLM Worker class BEFORE importing vLLM
 from .vllm_noise_injector import inject_noise_method
+
 inject_noise_method()
 
 from vllm import LLM, SamplingParams

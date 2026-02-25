@@ -48,7 +48,7 @@ def inject_noise_method():
     """
     try:
         from vllm.v1.worker.gpu_worker import Worker
-        
+
         # Only inject if not already present
         if not hasattr(Worker, 'add_noise'):
             Worker.add_noise = _worker_add_noise
