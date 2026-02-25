@@ -74,7 +74,7 @@ class SynonymAttack(BaseAttack):
             # Extract the content between the quotes
             content = docstring[3:-3]
             # Apply synonym replacement to the content
-            modified_content = self.attack_prompt(content)
+            modified_content = self._attack_prompt(content)
             # Reconstruct the docstring with the same quote type
             return f"{quote_type}{modified_content}{quote_type}"
         

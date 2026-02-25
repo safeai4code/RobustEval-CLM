@@ -65,6 +65,10 @@ class EvaluationConfig:
     save_results: Optional[str] = None
     visualization: bool = False
     
+    # VLLM parameters
+    tensor_parallel_size: Optional[int] = None
+    gpu_memory_utilization: Optional[float] = None  # e.g. 0.85; None uses model default
+    
     # Other parameters
     gen_ori: bool = False
     original_results: Optional[str] = None

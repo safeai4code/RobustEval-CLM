@@ -19,26 +19,32 @@ class TranslationAttack(BaseAttack):
             random.seed(self.seed)
             
         # Initialize translation models
-        self.model_name = config.get('model_name', 'facebook/mbart-large-50-many-to-many-mmt')
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.model_name = config.get('translation_model', 'facebook/mbart-large-50-many-to-many-mmt')
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        # Initialize forward (en->de) and backward (de->en) translators
+        # Initialize forward (en->de) and backward (de->en) translators.
+        # NOTE: HuggingFace pipeline overrides the device to CPU when
+        # torch.distributed is initialized (which vLLM does in in-process
+        # mode).  We work around this by explicitly moving the models to the
+        # target device after pipeline creation.
         print(f"Initializing translation models: {self.model_name}")
         self.en_to_de = pipeline(
             "translation",
             model=self.model_name,
             src_lang="en_XX",
             tgt_lang="de_DE",
-            device=self.device
         )
+        self.en_to_de.model.to(self.device)
+        self.en_to_de.device = self.device
         
         self.de_to_en = pipeline(
             "translation",
             model=self.model_name,
             src_lang="de_DE",
             tgt_lang="en_XX",
-            device=self.device
         )
+        self.de_to_en.model.to(self.device)
+        self.de_to_en.device = self.device
 
     def validate_config(self) -> None:
         """Validate the configuration parameters."""
@@ -69,12 +75,9 @@ class TranslationAttack(BaseAttack):
 
     def _attack_prompt(self, prompt: str) -> str:
         """Apply back translation to natural language prompt."""
-        # Translate English to German
-        german = self.en_to_de(prompt)[0]['translation_text']
-        
-        # Translate German back to English
-        back_translated = self.de_to_en(german)[0]['translation_text']
-        
+        max_length = max(512, int(len(prompt.split()) * 2))
+        german = self.en_to_de(prompt, max_length=max_length)[0]['translation_text']
+        back_translated = self.de_to_en(german, max_length=max_length)[0]['translation_text']
         return back_translated
 
     def _attack_code_comments(self, code: str) -> str:

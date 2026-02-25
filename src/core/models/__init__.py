@@ -8,6 +8,8 @@ from .model_implementations import (
     MagicCoderModel,
     StarCoderModel,
     StaticQuantizedModel,
+    VLLMModel,
+    VLLMQuantizedModel,
 )
 from .model_loader import Models
 from .model_registry import ModelRegistry
@@ -44,3 +46,11 @@ class DynamicQuantizedModel(DynamicQuantizedModel): pass
 
 @ModelRegistry.register("static")
 class StaticQuantizedModel(StaticQuantizedModel): pass
+
+
+@ModelRegistry.register("vllm")
+class VLLMModel(VLLMModel): pass
+
+
+@ModelRegistry.register("vllm_quantized")
+class VLLMQuantizedModel(VLLMQuantizedModel): pass

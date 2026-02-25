@@ -5,8 +5,22 @@ import torch
 
 from .base_attack import BaseAttack
 
+# Import VLLM model classes for isinstance check
+from src.core.models.model_implementations import VLLMModel, VLLMQuantizedModel
+
+
 
 class NoiseAttack(BaseAttack):
+    """Noise attack that adds random noise to model parameters.
+    
+    This attack supports both standard PyTorch models and VLLM models:
+    - For standard models: Adds noise directly to parameters using PyTorch
+    - For VLLM models: Uses collective RPC to add noise across all workers
+    
+    The VLLM noise injection requires the add_noise method to be injected
+    into the Worker class before VLLM is imported (handled in model_implementations.py).
+    """
+    
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.validate_config()
@@ -37,7 +51,49 @@ class NoiseAttack(BaseAttack):
         return input_text
 
     def apply_noise(self, model):
-        """Apply noise to model parameters and return the modified model."""
+        """Apply noise to model parameters and return the modified model.
+        
+        Args:
+            model: Model to apply noise to. Can be either:
+                - Standard PyTorch model (CodeLLaMAModel, StaticQuantizedModel, etc.)
+                - VLLM model (VLLMModel, VLLMQuantizedModel)
+        
+        Returns:
+            Modified model with noise added to parameters
+        """
+        print("why this function is called twice?")
+        # Check if this is a VLLM model by isinstance check
+        if isinstance(model, (VLLMModel, VLLMQuantizedModel)):
+            return self._apply_noise_vllm(model)
+        else:
+            return self._apply_noise_hf(model)
+    
+    def _apply_noise_vllm(self, model):
+        """Apply noise to VLLM model using collective RPC."""
+        print(f"Applying {self.config['noise_type']} noise to VLLM model with level {self.config['noise_level']}")
+        
+        # Get the executor from the VLLM model
+        executor = model.model.llm_engine.model_executor
+        
+        # Use the injected add_noise method via collective_rpc
+        seed = self.seed if self.seed is not None else 42
+        results = executor.collective_rpc(
+            "add_noise",
+            args=(
+                self.config['noise_type'],
+                self.config['noise_level'],
+                seed
+            )
+        )
+        
+        # Print results from each worker
+        for i, result in enumerate(results):
+            print(f"Worker {i}: {result}")
+        
+        return model
+    
+    def _apply_noise_hf(self, model):
+        """Apply noise to standard PyTorch models."""
         if self.seed is not None:
             # Set all random seeds for complete reproducibility
             torch.manual_seed(self.seed)
