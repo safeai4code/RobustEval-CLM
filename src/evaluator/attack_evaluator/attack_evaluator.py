@@ -200,8 +200,10 @@ class AttackEvaluator:
             attack_config_dict["input_type"] = "code"
         elif dataset_lower == "mbpp":
             attack_config_dict["input_type"] = "prompt"
+        elif dataset_lower == "canitedit":
+            attack_config_dict["input_type"] = "instruction"
         else:
-            raise ValueError(f"Unknown dataset: {config.dataset}. Choose 'humaneval' or 'mbpp'")
+            raise ValueError(f"Unknown dataset: {config.dataset}. Choose 'humaneval', 'mbpp', or 'canitedit'")
 
         # ------------------------------------------------------------------
         # 2. Instantiate the attacker BEFORE the main model is loaded so that

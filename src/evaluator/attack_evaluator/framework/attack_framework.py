@@ -1,5 +1,7 @@
+import gzip
 import json
 import os
+import tempfile
 from typing import Any, Dict, List, Optional
 
 from evalplus.data import get_human_eval_plus, get_mbpp_plus
@@ -9,7 +11,26 @@ from src.core.datasets.dataset_wrapper import AdversarialDatasetWrapper
 from src.core.models.base_model import BaseModel
 from src.evaluator.attack_evaluator.attack_registry import AttackRegistry
 from src.evaluator.attack_evaluator.attacks.base_attack import BaseAttack
-from src.evaluator.utils.evaluation import evaluator
+from src.evaluator.utils.evaluation import evaluator, canitedit_evaluator
+from src.utils.content_protection import mask_protected_content, restore
+from src.utils.function_extractor import extract_code_from_markdown, extract_functions
+
+
+# ---------------------------------------------------------------------------
+# CanItEdit helper utilities
+# ---------------------------------------------------------------------------
+
+def _build_edit_prompt(old: str, instr: str) -> str:
+    """Build the zero-shot edit prompt for CanItEdit."""
+    return (
+        "You are PythonEditGPT. You will be provided the original code snippet "
+        "and an instruction that specifies the changes you need to make. You will "
+        "produce the changed code, based on the original code and the instruction "
+        "given. Only produce the code, do not include any additional prose.\n\n"
+        "## Code Before\n```py\n" + old + "\n```\n\n"
+        "## Instruction\n" + instr + "\n\n"
+        "## Code After\n"
+    )
 
 
 class AttackFramework:
@@ -57,8 +78,14 @@ class AttackFramework:
             self.problems = get_mbpp_plus(mini=mini)
             self.attack_config["input_type"] = "prompt"
             self.concat_prompt = False
+        elif self.dataset == "canitedit":
+            self._canitedit_examples, self.problems = self._load_canitedit_dataset()
+            self.attack_config["input_type"] = "instruction"
+            self.concat_prompt = False
         else:
-            raise ValueError(f"Unknown dataset: {dataset}. Choose 'humaneval' or 'mbpp'")
+            raise ValueError(
+                f"Unknown dataset: {dataset}. Choose 'humaneval', 'mbpp', or 'canitedit'"
+            )
 
         # Use the pre-created attacker when one is supplied; otherwise build from registry.
         if attacker is not None:
@@ -71,6 +98,21 @@ class AttackFramework:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _extract_solution(self, output: str, prompt: str) -> str:
+        """Extract solution code based on dataset type.
+
+        For mbpp/humaneval: uses extract_functions (prompt+output when concat_prompt).
+        For canitedit: uses extract_code_from_markdown.
+        """
+        if self.dataset == "canitedit":
+            extracted = extract_code_from_markdown(output)
+        elif self.dataset in ("humaneval", "mbpp"):
+            code_to_extract = prompt + output if self.concat_prompt else output
+            extracted = extract_functions(code_to_extract)
+        else:
+            extracted = output
+        return extracted if extracted is not None else output
+
     def _apply_noise_to_model(self):
         """Apply noise attack to the model and return the modified model."""
         return self.attacker.apply_noise(self.model)
@@ -80,21 +122,38 @@ class AttackFramework:
         adversarial_prompts = {}
         for task_id, problem in problems:
             prompt = problem["prompt"]
-            adversarial_prompts[task_id] = self.attacker.generate_adversarial_example(prompt)
+            if self.dataset == "canitedit":
+                masked, placeholders = mask_protected_content(prompt)
+                adv = self.attacker.generate_adversarial_example(masked)
+                adversarial_prompts[task_id] = restore(adv, placeholders)
+            else:
+                adversarial_prompts[task_id] = self.attacker.generate_adversarial_example(prompt)
         return adversarial_prompts
 
     def _build_llm_adversarial_prompts(self, problems: list, generator) -> dict:
         """Build adversarial prompts via an LLM wrapper."""
         index_dict = {}
         prompts = []
+        placeholders_by_task = {}
+
         for task_id, problem in problems:
-            prompts.append(problem["prompt"])
-            index_dict[problem["prompt"]] = task_id
+            prompt = problem["prompt"]
+            if self.dataset == "canitedit":
+                masked, placeholders = mask_protected_content(prompt)
+                prompts.append(masked)
+                index_dict[masked] = task_id
+                placeholders_by_task[task_id] = placeholders
+            else:
+                prompts.append(prompt)
+                index_dict[prompt] = task_id
 
         adversarial_generation = generator.generate_dataset(prompts, self.attack_config["attack_type"])
         adversarial_prompts = {}
         for prompt, adv in adversarial_generation:
-            adversarial_prompts[index_dict[prompt]] = adv
+            task_id = index_dict[prompt]
+            if self.dataset == "canitedit":
+                adv = restore(adv, placeholders_by_task[task_id])
+            adversarial_prompts[task_id] = adv
         return adversarial_prompts
 
     # ------------------------------------------------------------------
@@ -122,6 +181,14 @@ class AttackFramework:
             Tuple ``(original_results, adversarial_results)`` when *gen_ori* is True,
             otherwise just ``adversarial_results``.
         """
+        is_canitedit = self.dataset == "canitedit"
+
+        def _ori_prompt(problem):
+            """Get the generation prompt for the original (unperturbed) input."""
+            if is_canitedit:
+                return _build_edit_prompt(problem["before"], problem["prompt"])
+            return problem["prompt"]
+
         problems_to_attack = (
             list(self.problems.items())
             if sample_indices is None
@@ -156,7 +223,7 @@ class AttackFramework:
                     for line in fh:
                         try:
                             data = json.loads(line)
-                            if "task_id" in data:
+                            if "task_id" in data and data.get("solution") is not None:
                                 adversarial_generations_dict[data["task_id"]] = data
                         except json.JSONDecodeError:
                             continue
@@ -173,6 +240,14 @@ class AttackFramework:
             assert len(adversarial_prompts) == len(problems_to_attack), (
                 "Adversarial prompts not generated correctly"
             )
+
+        # For canitedit the attack was applied to the raw instruction text;
+        # wrap the attacked instructions in the full edit prompt template.
+        if is_canitedit:
+            for task_id, problem in problems_to_attack:
+                adversarial_prompts[task_id] = _build_edit_prompt(
+                    problem["before"], adversarial_prompts[task_id]
+                )
 
         ori_prompt_f = None
         adv_prompt_f = None
@@ -200,7 +275,7 @@ class AttackFramework:
                             original_generations.append(original_generations_dict[task_id])
                             skipped_orig += 1
                         else:
-                            tasks_to_generate.append(problem["prompt"])
+                            tasks_to_generate.append(_ori_prompt(problem))
                             task_ids_to_generate.append(task_id)
 
                     if tasks_to_generate:
@@ -211,7 +286,8 @@ class AttackFramework:
                         for task_id, prompt, output in zip(
                             task_ids_to_generate, tasks_to_generate, original_outputs
                         ):
-                            entry = {"task_id": task_id, "solution": output, "prompt": prompt}
+                            solution = self._extract_solution(output, prompt)
+                            entry = {"task_id": task_id, "solution": solution, "prompt": prompt}
                             new_orig += 1
                             if ori_prompt_f:
                                 ori_prompt_f.write(json.dumps(entry) + "\n")
@@ -219,13 +295,14 @@ class AttackFramework:
                             original_generations.append(entry)
                 else:
                     for task_id, problem in tqdm(problems_to_attack, desc="Processing original tasks"):
-                        prompt = problem["prompt"]
                         if task_id in original_generations_dict:
                             original_generations.append(original_generations_dict[task_id])
                             skipped_orig += 1
                         else:
+                            prompt = _ori_prompt(problem)
                             output = self.model.generate(prompt, concat_prompt=self.concat_prompt)
-                            entry = {"task_id": task_id, "solution": output, "prompt": prompt}
+                            solution = self._extract_solution(output, prompt)
+                            entry = {"task_id": task_id, "solution": solution, "prompt": prompt}
                             new_orig += 1
                             if ori_prompt_f:
                                 ori_prompt_f.write(json.dumps(entry) + "\n")
@@ -257,7 +334,8 @@ class AttackFramework:
                     for task_id, prompt, output in zip(
                         task_ids_to_generate, prompts_to_generate, adversarial_outputs
                     ):
-                        entry = {"task_id": task_id, "solution": output, "prompt": prompt}
+                        solution = self._extract_solution(output, prompt)
+                        entry = {"task_id": task_id, "solution": solution, "prompt": prompt}
                         new_adv += 1
                         if adv_prompt_f:
                             adv_prompt_f.write(json.dumps(entry) + "\n")
@@ -271,7 +349,8 @@ class AttackFramework:
                         skipped_adv += 1
                     else:
                         output = self.model.generate(adversarial_prompt, concat_prompt=self.concat_prompt)
-                        entry = {"task_id": task_id, "solution": output, "prompt": adversarial_prompt}
+                        solution = self._extract_solution(output, adversarial_prompt)
+                        entry = {"task_id": task_id, "solution": solution, "prompt": adversarial_prompt}
                         new_adv += 1
                         if adv_prompt_f:
                             adv_prompt_f.write(json.dumps(entry) + "\n")
@@ -283,17 +362,36 @@ class AttackFramework:
             print(f"Adversarial outputs: {new_adv} newly generated, {skipped_adv} reused")
 
             # Evaluate
-            if gen_ori and save_results:
-                original_results = evaluator(self.dataset, original_generations)
-                os.makedirs(save_results, exist_ok=True)
-                with open(os.path.join(save_results, "original_results.json"), "w") as fh:
-                    json.dump(original_results, fh)
+            if is_canitedit:
+                comp_base = save_results or tempfile.mkdtemp(prefix="canitedit_eval_")
+                os.makedirs(comp_base, exist_ok=True)
 
-            adversarial_results = evaluator(self.dataset, adversarial_generations)
-            if save_results:
-                os.makedirs(save_results, exist_ok=True)
-                with open(os.path.join(save_results, "adversarial_results.json"), "w") as fh:
-                    json.dump(adversarial_results, fh)
+                if gen_ori:
+                    ori_dir = os.path.join(comp_base, "original_completions")
+                    self._save_canitedit_completions(original_generations, ori_dir)
+                    original_results = canitedit_evaluator(ori_dir)
+                    if save_results:
+                        with open(os.path.join(save_results, "original_results.json"), "w") as fh:
+                            json.dump(original_results, fh)
+
+                adv_dir = os.path.join(comp_base, "adversarial_completions")
+                self._save_canitedit_completions(adversarial_generations, adv_dir)
+                adversarial_results = canitedit_evaluator(adv_dir)
+                if save_results:
+                    with open(os.path.join(save_results, "adversarial_results.json"), "w") as fh:
+                        json.dump(adversarial_results, fh)
+            else:
+                if gen_ori and save_results:
+                    original_results = evaluator(self.dataset, original_generations)
+                    os.makedirs(save_results, exist_ok=True)
+                    with open(os.path.join(save_results, "original_results.json"), "w") as fh:
+                        json.dump(original_results, fh)
+
+                adversarial_results = evaluator(self.dataset, adversarial_generations)
+                if save_results:
+                    os.makedirs(save_results, exist_ok=True)
+                    with open(os.path.join(save_results, "adversarial_results.json"), "w") as fh:
+                        json.dump(adversarial_results, fh)
 
         finally:
             if ori_prompt_f:
@@ -302,6 +400,71 @@ class AttackFramework:
                 adv_prompt_f.close()
 
         return (original_results, adversarial_results) if gen_ori else adversarial_results
+
+    # ------------------------------------------------------------------
+    # CanItEdit-specific methods
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_canitedit_dataset():
+        """Load the nuprl/CanItEdit dataset and create problem entries.
+
+        Returns:
+            Tuple of (examples_dict, problems_dict) where:
+            - examples_dict maps full_name -> original dataset row (dict)
+            - problems_dict maps task_id -> problem info with 'prompt' set to
+              the instruction text (for adversarial attack).
+        """
+        from datasets import load_dataset
+
+        ds = load_dataset("nuprl/CanItEdit", split="test")
+        examples: Dict[str, dict] = {}
+        problems: Dict[str, dict] = {}
+
+        for ex in ds:
+            full_name = ex["full_name"]
+            examples[full_name] = dict(ex)
+            for instr_kind in ["instruction_descriptive", "instruction_lazy"]:
+                task_id = f"{full_name}/{instr_kind}"
+                problems[task_id] = {
+                    "prompt": ex[instr_kind],
+                    "before": ex["before"],
+                    "after": ex["after"],
+                    "full_name": full_name,
+                    "instr_kind": instr_kind,
+                }
+
+        return examples, problems
+
+    def _save_canitedit_completions(
+        self,
+        generations: List[Dict[str, Any]],
+        output_dir: str,
+    ) -> None:
+        """Save canitedit generations as ``.json.gz`` files for Docker evaluation."""
+        os.makedirs(output_dir, exist_ok=True)
+        gen_by_id = {g["task_id"]: g for g in generations}
+
+        for task_id, problem in self.problems.items():
+            gen = gen_by_id.get(task_id)
+            if gen is None or gen.get("solution") is None:
+                continue
+
+            ex = self._canitedit_examples[problem["full_name"]]
+            result = dict(ex)
+            result["instr_kind"] = problem["instr_kind"]
+            result["prompt"] = ""
+            result["completions"] = [gen["solution"]]
+            result["language"] = "py"
+            result["temperature"] = 0.0
+            result["top_p"] = 1.0
+            result["max_tokens"] = 1024
+            result["stop_tokens"] = []
+
+            fname = f"{problem['full_name']}_{problem['instr_kind']}.json.gz"
+            out_path = os.path.join(output_dir, fname)
+            with gzip.open(out_path, "wt") as f:
+                json.dump(result, f)
 
 
 if __name__ == "__main__":
