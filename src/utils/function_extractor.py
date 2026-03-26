@@ -59,7 +59,7 @@ def extract_functions(content: str) -> str:
             result.append("")  # Add blank line between imports and functions
     
     if functions:
-        result.extend(functions)
+        result.append(functions[0])
     
     return '\n'.join(result)
 

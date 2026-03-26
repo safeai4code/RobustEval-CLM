@@ -5,8 +5,6 @@ import tempfile
 from typing import Any, Dict, List, Optional
 
 from evalplus.data import get_human_eval_plus, get_mbpp_plus
-from tqdm import tqdm
-
 from src.core.datasets.dataset_wrapper import AdversarialDatasetWrapper
 from src.core.models.base_model import BaseModel
 from src.evaluator.attack_evaluator.attack_registry import AttackRegistry
@@ -43,7 +41,6 @@ class AttackFramework:
         attack_config: Dict[str, Any] = None,
         dataset: str = "humaneval",
         mini: bool = False,
-        is_vllm: bool = False,
         attacker: Optional[BaseAttack] = None,
     ):
         """
@@ -55,7 +52,6 @@ class AttackFramework:
             attack_config: Attack configuration dictionary.
             dataset: Dataset to use ("humaneval" or "mbpp").
             mini: Whether to use the mini version of the dataset.
-            is_vllm: Whether the model is a VLLM model (enables batch processing).
             attacker: Pre-instantiated attack object.  When provided, *attack_method*
                 and *attack_config* are only used for book-keeping; no new attacker is
                 created.  Pass this when the attacker must be initialised *before* the
@@ -67,7 +63,6 @@ class AttackFramework:
         self.attack_config = attack_config or {}
         self.dataset = dataset.lower()
         self.mini = mini
-        self.is_vllm = is_vllm
 
         # Load dataset and derive input_type
         if self.dataset == "humaneval":
@@ -266,96 +261,60 @@ class AttackFramework:
 
             # Original (unperturbed) generations
             if gen_ori:
-                if self.is_vllm:
-                    tasks_to_generate = []
-                    task_ids_to_generate = []
+                tasks_to_generate = []
+                task_ids_to_generate = []
 
-                    for task_id, problem in problems_to_attack:
-                        if task_id in original_generations_dict:
-                            original_generations.append(original_generations_dict[task_id])
-                            skipped_orig += 1
-                        else:
-                            tasks_to_generate.append(_ori_prompt(problem))
-                            task_ids_to_generate.append(task_id)
+                for task_id, problem in problems_to_attack:
+                    if task_id in original_generations_dict:
+                        original_generations.append(original_generations_dict[task_id])
+                        skipped_orig += 1
+                    else:
+                        tasks_to_generate.append(_ori_prompt(problem))
+                        task_ids_to_generate.append(task_id)
 
-                    if tasks_to_generate:
-                        print(f"Generating {len(tasks_to_generate)} original outputs in batch...")
-                        original_outputs = self.model.batch_generate(
-                            tasks_to_generate, concat_prompt=self.concat_prompt
-                        )
-                        for task_id, prompt, output in zip(
-                            task_ids_to_generate, tasks_to_generate, original_outputs
-                        ):
-                            solution = self._extract_solution(output, prompt)
-                            entry = {"task_id": task_id, "solution": solution, "prompt": prompt}
-                            new_orig += 1
-                            if ori_prompt_f:
-                                ori_prompt_f.write(json.dumps(entry) + "\n")
-                                ori_prompt_f.flush()
-                            original_generations.append(entry)
-                else:
-                    for task_id, problem in tqdm(problems_to_attack, desc="Processing original tasks"):
-                        if task_id in original_generations_dict:
-                            original_generations.append(original_generations_dict[task_id])
-                            skipped_orig += 1
-                        else:
-                            prompt = _ori_prompt(problem)
-                            output = self.model.generate(prompt, concat_prompt=self.concat_prompt)
-                            solution = self._extract_solution(output, prompt)
-                            entry = {"task_id": task_id, "solution": solution, "prompt": prompt}
-                            new_orig += 1
-                            if ori_prompt_f:
-                                ori_prompt_f.write(json.dumps(entry) + "\n")
-                                ori_prompt_f.flush()
-                            original_generations.append(entry)
+                if tasks_to_generate:
+                    print(f"Generating {len(tasks_to_generate)} original outputs in batch...")
+                    original_outputs = self.model.batch_generate(tasks_to_generate)
+                    for task_id, prompt, output in zip(
+                        task_ids_to_generate, tasks_to_generate, original_outputs
+                    ):
+                        solution = self._extract_solution(output, prompt)
+                        entry = {"task_id": task_id, "solution": solution, "prompt": prompt}
+                        new_orig += 1
+                        if ori_prompt_f:
+                            ori_prompt_f.write(json.dumps(entry) + "\n")
+                            ori_prompt_f.flush()
+                        original_generations.append(entry)
 
             # Apply noise to model weights (noise attack only)
             if self.attack_method == "noise":
                 self.model = self.attacker.apply_noise(self.model)
 
             # Adversarial generations
-            if self.is_vllm:
-                prompts_to_generate = []
-                task_ids_to_generate = []
+            prompts_to_generate = []
+            task_ids_to_generate = []
 
-                for task_id, _ in problems_to_attack:
-                    if task_id in adversarial_generations_dict:
-                        adversarial_generations.append(adversarial_generations_dict[task_id])
-                        skipped_adv += 1
-                    else:
-                        prompts_to_generate.append(adversarial_prompts[task_id])
-                        task_ids_to_generate.append(task_id)
+            for task_id, _ in problems_to_attack:
+                if task_id in adversarial_generations_dict:
+                    adversarial_generations.append(adversarial_generations_dict[task_id])
+                    skipped_adv += 1
+                else:
+                    prompts_to_generate.append(adversarial_prompts[task_id])
+                    task_ids_to_generate.append(task_id)
 
-                if prompts_to_generate:
-                    print(f"Generating {len(prompts_to_generate)} adversarial outputs in batch...")
-                    adversarial_outputs = self.model.batch_generate(
-                        prompts_to_generate, concat_prompt=self.concat_prompt
-                    )
-                    for task_id, prompt, output in zip(
-                        task_ids_to_generate, prompts_to_generate, adversarial_outputs
-                    ):
-                        solution = self._extract_solution(output, prompt)
-                        entry = {"task_id": task_id, "solution": solution, "prompt": prompt}
-                        new_adv += 1
-                        if adv_prompt_f:
-                            adv_prompt_f.write(json.dumps(entry) + "\n")
-                            adv_prompt_f.flush()
-                        adversarial_generations.append(entry)
-            else:
-                for task_id, _ in tqdm(problems_to_attack, desc="Processing attack tasks"):
-                    adversarial_prompt = adversarial_prompts[task_id]
-                    if task_id in adversarial_generations_dict:
-                        adversarial_generations.append(adversarial_generations_dict[task_id])
-                        skipped_adv += 1
-                    else:
-                        output = self.model.generate(adversarial_prompt, concat_prompt=self.concat_prompt)
-                        solution = self._extract_solution(output, adversarial_prompt)
-                        entry = {"task_id": task_id, "solution": solution, "prompt": adversarial_prompt}
-                        new_adv += 1
-                        if adv_prompt_f:
-                            adv_prompt_f.write(json.dumps(entry) + "\n")
-                            adv_prompt_f.flush()
-                        adversarial_generations.append(entry)
+            if prompts_to_generate:
+                print(f"Generating {len(prompts_to_generate)} adversarial outputs in batch...")
+                adversarial_outputs = self.model.batch_generate(prompts_to_generate)
+                for task_id, prompt, output in zip(
+                    task_ids_to_generate, prompts_to_generate, adversarial_outputs
+                ):
+                    solution = self._extract_solution(output, prompt)
+                    entry = {"task_id": task_id, "solution": solution, "prompt": prompt}
+                    new_adv += 1
+                    if adv_prompt_f:
+                        adv_prompt_f.write(json.dumps(entry) + "\n")
+                        adv_prompt_f.flush()
+                    adversarial_generations.append(entry)
 
             if gen_ori:
                 print(f"Original outputs: {new_orig} newly generated, {skipped_orig} reused")

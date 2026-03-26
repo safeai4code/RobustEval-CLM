@@ -245,7 +245,6 @@ class AttackEvaluator:
             attack_method=config.attack_method,
             attack_config=attack_config_dict,
             dataset=config.dataset,
-            is_vllm=(config.model_type == "vllm"),
             attacker=attacker,
         )
 
