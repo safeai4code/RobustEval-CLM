@@ -41,6 +41,7 @@ class AttackRegistry:
             from src.evaluator.attack_evaluator.attacks import (  # noqa: F401
                 CharacterCaseAttack,
                 ChatGPTAttack,
+                LLMParaphraseAttack,
                 NaturalNoiseAttack,
                 NoiseAttack,
                 SemanticAttack,
@@ -55,6 +56,7 @@ class AttackRegistry:
             cls.register("translate", TranslationAttack)
             cls.register("chatgpt", ChatGPTAttack)
             cls.register("llm_attack", ChatGPTAttack)
+            cls.register("llm_paraphrase", LLMParaphraseAttack)
             cls.register("noise", NoiseAttack)
             cls.register("natural_noise", NaturalNoiseAttack)
             cls.register("semantic", SemanticAttack)

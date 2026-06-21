@@ -3,6 +3,7 @@
 from .base_attack import BaseAttack
 from .char_attack import CharacterCaseAttack
 from .chatgpt_attack import AttackType, ChatGPTAttack
+from .llm_paraphrase_attack import LLMParaphraseAttack
 from .natural_noise import NaturalNoiseAttack
 from .noise_attack import NoiseAttack
 from .semantic import SemanticAttack
@@ -13,10 +14,11 @@ from .translation_attack import TranslationAttack
 __all__ = [
     "BaseAttack",
     "SynonymAttack",
-    "CharacterCaseAttack", 
+    "CharacterCaseAttack",
     "TranslationAttack",
     "ChatGPTAttack",
     "AttackType",
+    "LLMParaphraseAttack",
     "NoiseAttack",
     "NaturalNoiseAttack",
     "SemanticAttack",
