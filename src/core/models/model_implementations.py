@@ -804,10 +804,13 @@ class VLLMQuantizedModel(BaseModel):
         
         self.gen_config = kwargs.get('generation_config')
         self.tensor_parallel_size = kwargs.get('tensor_parallel_size', 1)
-        self.gpu_memory_utilization = kwargs.get('gpu_memory_utilization', 0.85)
+        # BnB inflight quantization dequantizes weights at runtime (for MoE models,
+        # whole per-layer expert tensors) in transient buffers that vLLM's memory
+        # budget does not account for, so leave extra headroom by default.
+        self.gpu_memory_utilization = kwargs.get('gpu_memory_utilization', 0.88)
         self.max_model_len = kwargs.get('max_model_len', 4096)
         self.seed = kwargs.get('seed', 42)
-        
+
         super().__init__(model_path, **kwargs)
         self.load()
 

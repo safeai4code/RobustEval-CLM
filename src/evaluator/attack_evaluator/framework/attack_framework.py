@@ -112,6 +112,22 @@ class AttackFramework:
         """Apply noise attack to the model and return the modified model."""
         return self.attacker.apply_noise(self.model)
 
+    def _is_bigcode_family(self) -> bool:
+        """Whether the generation model belongs to the bigcode (StarCoder) family."""
+        model_path = (getattr(self.model, "model_path", "") or "").lower()
+        return any(name in model_path for name in ("bigcode", "starcoder", "santacoder"))
+
+    def _finalize_prompt(self, prompt: str) -> str:
+        """Apply model-family-specific prompt fixes before generation.
+
+        The bigcode family (StarCoder/SantaCoder) expects HumanEval prompts without a
+        trailing newline; keeping it degrades completion quality. Applied to both the
+        original and adversarial batches so they stay on equal footing.
+        """
+        if self.dataset == "humaneval" and self._is_bigcode_family():
+            return prompt.rstrip("\n")
+        return prompt
+
     def _build_adversarial_prompts(self, problems: list) -> dict:
         """Build adversarial prompts for each problem."""
         adversarial_prompts = {}
@@ -237,10 +253,14 @@ class AttackFramework:
             )
 
         # For canitedit the attack was applied to the raw instruction text;
-        # wrap the attacked instructions in the full edit prompt template.
+        # wrap the attacked instructions in the full edit prompt template. An attacker
+        # may override the wrapper (e.g. the destructure attack strips its structure)
+        # by exposing a wrap_edit_prompt(before, instruction) method.
         if is_canitedit:
+            wrap_edit_prompt = getattr(self.attacker, "wrap_edit_prompt", None)
+            build_prompt = wrap_edit_prompt if callable(wrap_edit_prompt) else _build_edit_prompt
             for task_id, problem in problems_to_attack:
-                adversarial_prompts[task_id] = _build_edit_prompt(
+                adversarial_prompts[task_id] = build_prompt(
                     problem["before"], adversarial_prompts[task_id]
                 )
 
@@ -269,7 +289,7 @@ class AttackFramework:
                         original_generations.append(original_generations_dict[task_id])
                         skipped_orig += 1
                     else:
-                        tasks_to_generate.append(_ori_prompt(problem))
+                        tasks_to_generate.append(self._finalize_prompt(_ori_prompt(problem)))
                         task_ids_to_generate.append(task_id)
 
                 if tasks_to_generate:
@@ -299,7 +319,7 @@ class AttackFramework:
                     adversarial_generations.append(adversarial_generations_dict[task_id])
                     skipped_adv += 1
                 else:
-                    prompts_to_generate.append(adversarial_prompts[task_id])
+                    prompts_to_generate.append(self._finalize_prompt(adversarial_prompts[task_id]))
                     task_ids_to_generate.append(task_id)
 
             if prompts_to_generate:

@@ -1,3 +1,19 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def outputs_dir() -> Path:
+    """Return the results directory used by all analysis scripts.
+
+    Prefers the committed pass@1-only tree ``outputs_public/`` (shipped with the
+    repository and matching the paper's experiment scope); falls back to the
+    full raw ``outputs/`` tree produced by local experiment runs.
+    """
+    public = ROOT / "outputs_public"
+    return public if public.exists() else ROOT / "outputs"
+
+
 MODELS = {
     'DeepSeek': [
         'deepseek-ai/deepseek-coder-1.3b-base',
@@ -25,7 +41,6 @@ MODELS = {
         'microsoft/NextCoder-32B',
     ],
     'Gemma': [
-        # 'google/gemma-3-1b-it',
         'google/gemma-3-4b-it',
         'google/gemma-3-12b-it',
         'google/gemma-3-27b-it',
@@ -33,8 +48,6 @@ MODELS = {
     'MOE': [
         'Qwen/Qwen3-Coder-30B-A3B-Instruct',
         'deepseek-ai/DeepSeek-Coder-V2-Lite-Base',
-        # 'mistralai/Codestral-22B-v0.1',
-        # 'mistralai/Mistral-Small-3.2-24B-Instruct-2506',
     ]
 }
 
@@ -49,6 +62,7 @@ ATTACKS = [
     'char',
     'synonym',
     'translate',
+    'destructure',
 ]
 
 NOISE_TYPES = [
