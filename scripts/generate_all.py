@@ -1,10 +1,12 @@
-"""Generate all result tables and figures from outputs_public.
+"""Generate all result tables and figures for the paper.
 
-Combines:
-  - collect_passat1.py     → passat1.tex
-  - collect_passat1_noise.py → passat1_noise.tex, noise_results.csv
-  - collect_rrs.py         → rrs.tex
-  - plot_noise_figure.py   → noise_robustness_figure.{pdf,png}
+Reads pass@1 results from ``outputs_public/`` if present (the pass@1-only tree
+shipped with the repository), otherwise from ``outputs/`` (local experiment
+runs). Writes everything into ``statistic_results/``:
+  - passat1.tex, passrate_rl.tex   — adversarial pass@1 tables
+  - passat1_noise.tex, noise_results.csv — noise pass@1 table / raw values
+  - rrs.tex                        — Relative Robustness Score table
+  - noise_robustness_figure.{pdf,png} — combined noise figure
 """
 
 import csv
@@ -17,9 +19,10 @@ from typing import Optional
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from scripts.metadata import ATTACKS, DATASETS, MODELS, NOISE_LEVELS, NOISE_TYPES, QUANTIZED_TYPES
+from scripts.metadata import (ATTACKS, DATASETS, MODELS, NOISE_LEVELS, NOISE_TYPES, QUANTIZED_TYPES,
+                              outputs_dir)
 
-OUTPUTS_DIR = ROOT / "outputs_public"
+OUTPUTS_DIR = outputs_dir()
 RESULTS_DIR = ROOT / "statistic_results"
 
 # ── Shared labels ───────────────────────────────────────────────────────────────
@@ -27,6 +30,17 @@ RESULTS_DIR = ROOT / "statistic_results"
 DATASET_LABELS = {"mbpp": "MBPP", "humaneval": "HumanEval", "canitedit": "CanItEdit"}
 QUANT_LABELS = {"base": "FP", "bnb8": "8-bit", "bnb4": "4-bit"}
 NOISE_TYPE_LABELS = {"gaussian": "G", "uniform": "U"}
+
+# Placeholder printed in a pass@1 cell when no pass_rates.json is available.
+MISSING_MARKER = "-"
+
+# Labels for the two per-dataset score variants, in the order cells are printed
+# (the `base` then `plus` keys of pass_rates.json), plus the noun describing them.
+# CanItEdit stores instruction_descriptive as `base` and instruction_lazy as `plus`.
+SCORE_LABELS = {
+    "canitedit": ("Descriptive", "Lazy", "instruction variants"),
+}
+DEFAULT_SCORE_LABELS = ("Base", "Plus", "test sets")
 
 # ── Shared helpers ──────────────────────────────────────────────────────────────
 
@@ -49,10 +63,10 @@ def _read_pass_rates(folder: Path) -> Optional[tuple[float, float]]:
 
 
 def _fmt_pass_pair(folder: Path) -> str:
-    """Return 'base / plus' percentage string, or 'x' if missing."""
+    """Return 'base / plus' percentage string, or MISSING_MARKER if missing."""
     pair = _read_pass_rates(folder)
     if pair is None:
-        return "x"
+        return MISSING_MARKER
     return f"{pair[0] * 100:.1f} / {pair[1] * 100:.1f}"
 
 
@@ -72,25 +86,49 @@ def _noise_folder(dataset: str, org: str, model_name: str, quant_type: str,
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  1. Pass@1 adversarial table  (passat1.tex)
+#  1. Pass@1 adversarial tables  (passat1.tex, passrate_rl.tex)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def _build_passat1_table(dataset: str) -> str:
-    """Build a LaTeX table for one dataset's adversarial pass@1 results."""
+def _build_passat1_table(dataset: str, use_adjustbox: bool = False) -> str:
+    """Build a LaTeX table for one dataset's adversarial pass@1 results.
+
+    Args:
+        dataset: Dataset key (e.g. ``mbpp``).
+        use_adjustbox: Wrap the tabular in ``\\begin{adjustbox}{width=\\textwidth}``
+            so the table is scaled to the text width (requires the ``adjustbox``
+            package). This is the only difference between the two emitted files.
+    """
     ds_label = DATASET_LABELS.get(dataset, dataset.capitalize())
+    left_label, right_label, variant_noun = SCORE_LABELS.get(dataset, DEFAULT_SCORE_LABELS)
+
+    n_attack_cols = 1 + len(ATTACKS)  # clean + adversarial attacks
+    last_col = 3 + n_attack_cols
+    col_spec = "lll" + " c" * n_attack_cols
+    attack_label_map = {
+        "char": "Char",
+        "synonym": "Synonym",
+        "translate": "Translate",
+        "llm_paraphrase": "Paraphrase",
+    }
+    attack_headers = " & ".join(attack_label_map.get(a, a.replace("_", " ").title()) for a in ATTACKS)
 
     lines = [
         r"\begin{table*}[htbp]",
         r"\centering",
-        r"\begin{tabular}{lll cccc}",
+    ]
+    if use_adjustbox:
+        lines.append(r"\begin{adjustbox}{width=\textwidth}")
+    lines += [
+        f"\\begin{{tabular}}{{{col_spec}}}",
         r"\toprule",
         f"\\multirow{{2}}{{*}}{{\\textbf{{Family}}}} & "
         f"\\multirow{{2}}{{*}}{{\\textbf{{Model}}}} & "
         f"\\multirow{{2}}{{*}}{{\\textbf{{Prec.}}}} & "
-        f"\\multicolumn{{4}}{{c}}{{\\textbf{{{ds_label} (Base / Plus)}}}} \\\\",
-        r"\cmidrule(lr){4-7}",
-        r"& & & Clean & Char & Synonym & Translate \\",
+        f"\\multicolumn{{{n_attack_cols}}}{{c}}"
+        f"{{\\textbf{{{ds_label} ({left_label} / {right_label})}}}} \\\\",
+        f"\\cmidrule(lr){{4-{last_col}}}",
+        f"& & & Clean & {attack_headers} \\\\",
         r"\midrule",
     ]
 
@@ -123,17 +161,22 @@ def _build_passat1_table(dataset: str) -> str:
             is_last_model = model_idx == len(models) - 1
             is_last_family = family_idx == len(MODELS) - 1
             if not is_last_model:
-                lines.append(r"\cmidrule{2-7}")
+                lines.append(f"\\cmidrule{{2-{last_col}}}")
             elif not is_last_family:
                 lines.append(r"\midrule")
 
     lines += [
         r"\bottomrule",
         r"\end{tabular}",
+    ]
+    if use_adjustbox:
+        lines.append(r"\end{adjustbox}")
+    lines += [
         r"\vspace{2mm}",
-        f"\\caption{{Detailed pass@1 results for Clean performance and three Adversarial attacks "
+        f"\\caption{{Detailed pass@1 results for Clean performance and {len(ATTACKS)} Adversarial attacks "
         f"on the \\textbf{{{ds_label}}} dataset. "
-        f"Each cell reports the performance on the Base and Plus test sets respectively (Base / Plus).}}",
+        f"Each cell reports the performance on the {left_label} and {right_label} "
+        f"{variant_noun} respectively ({left_label} / {right_label}).}}",
         f"\\label{{tab:adv_{dataset}}}",
         r"\end{table*}",
     ]
@@ -141,12 +184,17 @@ def _build_passat1_table(dataset: str) -> str:
 
 
 def generate_passat1_tex() -> None:
-    """Write passat1.tex with one adversarial table per dataset."""
-    output_path = RESULTS_DIR / "passat1.tex"
-    tables = [_build_passat1_table(ds) for ds in DATASETS]
-    with open(output_path, "w") as f:
-        f.write("\n\n".join(tables))
-    print(f"Written to {output_path}")
+    """Write the adversarial pass@1 tables, one table per dataset.
+
+    Emits two files from the same data: ``passat1.tex`` (plain tabular) and
+    ``passrate_rl.tex`` (same tables wrapped in ``adjustbox`` to fit \\textwidth).
+    """
+    for filename, use_adjustbox in (("passat1.tex", False), ("passrate_rl.tex", True)):
+        output_path = RESULTS_DIR / filename
+        tables = [_build_passat1_table(ds, use_adjustbox=use_adjustbox) for ds in DATASETS]
+        with open(output_path, "w") as f:
+            f.write("\n\n".join(tables))
+        print(f"Written to {output_path}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -279,6 +327,10 @@ def generate_noise_tex_csv() -> None:
 #  3. RRS table  (rrs.tex)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Target width the RRS tabular is scaled to. Use "\textwidth" for a full-width
+# table* (two-column layouts) or "\linewidth" if the table is placed in one column.
+RRS_TABLE_WIDTH = r"\textwidth"
+
 _SIZE_PATTERN = re.compile(r"(\d+(?:\.\d+)?[bBmMkK])", re.IGNORECASE)
 _MOE_SIZE_LABELS = {
     "Qwen3-Coder-30B-A3B-Instruct": "Q-30B-A3B",
@@ -309,11 +361,16 @@ def _extract_size_label(model_name: str) -> str:
 
 def _compute_rrs(before_base: float, after_base: float,
                  before_bnb8: float, after_bnb8: float) -> float:
-    """Compute Robustness Ratio Score."""
+    """Compute Robustness Ratio Score.
+
+    A 0/0 cell means neither the full-precision nor the quantized model moved at
+    all under the attack, i.e. they are equally robust, so it scores 1.0 rather
+    than the indeterminate infinity.
+    """
     numerator = abs(before_base - after_base)
     denominator = abs(before_bnb8 - after_bnb8)
     if denominator == 0.0:
-        return float("inf")
+        return 1.0 if numerator == 0.0 else float("inf")
     return numerator / denominator
 
 
@@ -345,7 +402,8 @@ def _rrs_pair(dataset: str, org: str, model_name: str, attack: str,
             return rf"\dgreen{{{val_str}}}"
         return rf"\black{{{val_str}}}"
 
-    cell = f"{_fmt(base_idx)} / {_fmt(plus_idx)}"
+    # No spaces around the slash: with 12 data columns the table is width-critical.
+    cell = f"{_fmt(base_idx)}/{_fmt(plus_idx)}"
     return cell, raw_values
 
 
@@ -353,15 +411,19 @@ def _build_rrs_table() -> tuple[str, int, int, int]:
     """Build a single LaTeX RRS table combining all families, datasets, attacks."""
     family_rows: list[tuple[str, list[tuple[str, list[str], str]]]] = []
     red_count = green_count = black_count = 0
-    col_red = [0] * 9
-    col_total = [0] * 9
     eps = 1e-9
 
     ds_configs = [
         ("mbpp", 0, 1),
         ("humaneval", 0, 1),
-        ("canitedit", 1, 0),  # CanItEdit-L = plus (1), CanItEdit-D = base (0)
+        ("canitedit", 0, 1),  # CanItEdit-D = base (0), CanItEdit-L = plus (1)
     ]
+
+    n_attacks = len(ATTACKS)
+    n_ds = len(ds_configs)
+    n_data_cols = n_attacks * n_ds
+    col_red = [0] * n_data_cols
+    col_total = [0] * n_data_cols
 
     for family, model_paths in MODELS.items():
         model_data: list[tuple[str, list[str], str]] = []
@@ -392,29 +454,49 @@ def _build_rrs_table() -> tuple[str, int, int, int]:
             model_data.append((size_label, cells, pct_str))
         family_rows.append((family, model_data))
 
+    rrs_attack_label_map = {
+        "char": "Ch",
+        "synonym": "W",
+        "translate": "S",
+        "llm_paraphrase": "P",
+    }
+    attack_short_headers = [
+        rf"\textbf{{{rrs_attack_label_map.get(a, a[:2].title())}}}" for a in ATTACKS
+    ]
+    col_spec = "ll" + (" " + "c" * n_attacks) * n_ds + " c"
+    per_ds_header = " & ".join(attack_short_headers)
+    full_header = "  & & " + " & ".join([per_ds_header] * n_ds) + r" & \textbf{\%${>}1$} \\"
+    cmid_parts = []
+    for ds_idx in range(n_ds):
+        start = 3 + ds_idx * n_attacks
+        end = start + n_attacks - 1
+        cmid_parts.append(f"\\cmidrule(lr){{{start}-{end}}}")
+    cmid_line = "".join(cmid_parts)
+
     lines = [
         r"\begin{table*}[t]",
         r"\centering",
         r"\caption{Robustness Comparison (RRS) of Original and Quantized LLMs Under"
-        r" Adversarial Attacks. Ch/W/S = character/word/sentence-level. Each cell shows"
-        r" \textit{base\,/\,plus} results. RRS${>}1$ indicates quantized model is more"
-        r" robust; $\uparrow$/$\downarrow$ denote infinite-ratio cases.}",
+        r" Adversarial Attacks. Ch/W/S/De = character/word/sentence/structure-level."
+        r" Each cell shows \textit{base\,/\,plus} results (Descriptive\,/\,Lazy for"
+        r" CanItEdit). RRS${>}1$ indicates quantized model is more robust; $\infty$"
+        r" denotes infinite-ratio cases.}",
         r"\label{tab:rq1}",
-        r"\setlength{\tabcolsep}{2.5pt}",
+        r"\setlength{\tabcolsep}{2pt}",
         r"\renewcommand{\arraystretch}{0.90}",
         r"\footnotesize",
-        r"\begin{tabular}{ll ccc ccc ccc c}",
+        # \resizebox (graphicx) shrinks the natural tabular width down to the text
+        # width, so the table never overfills the page whatever the document class.
+        f"\\resizebox{{{RRS_TABLE_WIDTH}}}{{!}}{{%",
+        f"\\begin{{tabular}}{{{col_spec}}}",
         r"\toprule",
         r"\multirow{2}{*}{\textbf{Family}} &",
         r"\multirow{2}{*}{\textbf{Size}} &",
-        r"\multicolumn{3}{c}{\textbf{MBPP / MBPP+}} &",
-        r"\multicolumn{3}{c}{\textbf{HumanEval / HumanEval+}} &",
-        r"\multicolumn{3}{c}{\textbf{CanItEdit-L / CanItEdit-D}} & \\",
-        r"\cmidrule(lr){3-5}\cmidrule(lr){6-8}\cmidrule(lr){9-11}",
-        r"  & & \textbf{Ch} & \textbf{W} & \textbf{S}"
-        r"    & \textbf{Ch} & \textbf{W} & \textbf{S}"
-        r"    & \textbf{Ch} & \textbf{W} & \textbf{S}"
-        r"    & \textbf{\%${>}1$} \\",
+        f"\\multicolumn{{{n_attacks}}}{{c}}{{\\textbf{{MBPP / MBPP+}}}} &",
+        f"\\multicolumn{{{n_attacks}}}{{c}}{{\\textbf{{HumanEval / HumanEval+}}}} &",
+        f"\\multicolumn{{{n_attacks}}}{{c}}{{\\textbf{{CanItEdit-D / CanItEdit-L}}}} & \\\\",
+        cmid_line,
+        full_header,
         r"\midrule",
     ]
 
@@ -428,7 +510,7 @@ def _build_rrs_table() -> tuple[str, int, int, int]:
             lines.append(r"\midrule")
 
     col_summary_cells = []
-    for i in range(9):
+    for i in range(n_data_cols):
         if col_total[i] > 0:
             col_summary_cells.append(f"{col_red[i] / col_total[i] * 100:.0f}\\%")
         else:
@@ -446,6 +528,7 @@ def _build_rrs_table() -> tuple[str, int, int, int]:
     lines += [
         r"\bottomrule",
         r"\end{tabular}",
+        r"}",
         r"\end{table*}",
     ]
 
