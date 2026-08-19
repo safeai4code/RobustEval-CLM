@@ -40,12 +40,17 @@ build/
 # Project specific
 *.log
 .env
+.envrc
+.venv/
+outputs/
+plots/
+noise_plots/
+statistic_results/
+CLAUDE.md
+/TSE_Major_Revision_Benchmarking_Robustness_of_Quantized_LLMs_in_Code_Generation-2.pdf
 
 # Code style and linting
 .isort.cfg
 .flake8
 .style.yapf
 .pylintrc
-
-
-outputs_public
