@@ -31,6 +31,23 @@ def _build_edit_prompt(old: str, instr: str) -> str:
     )
 
 
+def _write_pass_rates(results: Dict[str, Any], save_results: str) -> None:
+    """Write pass_rates.json ({"base": <pass@1>, "plus": <pass@1>}) for a results dict.
+
+    This is the compact summary consumed by the analysis scripts
+    (see scripts/generate_all.py and the outputs layout in the README).
+    """
+    pass_at_k = results.get("pass_at_k") or {}
+    rates = {
+        variant: scores["pass@1"]
+        for variant, scores in pass_at_k.items()
+        if isinstance(scores, dict) and "pass@1" in scores
+    }
+    if rates:
+        with open(os.path.join(save_results, "pass_rates.json"), "w") as fh:
+            json.dump(rates, fh)
+
+
 class AttackFramework:
     """Orchestrates adversarial attack generation and model evaluation."""
 
@@ -359,6 +376,7 @@ class AttackFramework:
                 if save_results:
                     with open(os.path.join(save_results, "adversarial_results.json"), "w") as fh:
                         json.dump(adversarial_results, fh)
+                    _write_pass_rates(adversarial_results, save_results)
             else:
                 if gen_ori and save_results:
                     original_results = evaluator(self.dataset, original_generations)
@@ -371,6 +389,7 @@ class AttackFramework:
                     os.makedirs(save_results, exist_ok=True)
                     with open(os.path.join(save_results, "adversarial_results.json"), "w") as fh:
                         json.dump(adversarial_results, fh)
+                    _write_pass_rates(adversarial_results, save_results)
 
         finally:
             if ori_prompt_f:

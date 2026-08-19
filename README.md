@@ -266,7 +266,8 @@ outputs/<dataset>/<org>/<model>/<attack>[/<noise_type>/<noise_level>]/<quant>/
 ├── original_prompts.jsonl        # if --gen_ori
 ├── adversarial_prompts.jsonl
 ├── original_results.json         # if --gen_ori
-└── adversarial_results.json
+├── adversarial_results.json
+└── pass_rates.json               # {"base": <pass@1>, "plus": <pass@1>}
 ```
 
 Where `<quant>` is one of `base`, `bnb8`, `bnb4`. For CanItEdit, intermediate
